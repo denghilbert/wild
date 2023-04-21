@@ -422,9 +422,16 @@ def create_nerf(rank, args):
     return start, models
 
 
-def ddp_train_nerf(rank, args):
+def ddp_train_nerf(rank, args, one_card=False):
     ###### set up multi-processing
-    setup(rank, args.world_size)
+    if one_card == False:
+        setup(rank, args.world_size)
+    else:
+        os.environ['MASTER_PORT'] = '12413'
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(
+            backend="nccl", init_method="env://"
+        )
     ###### set up logger
     logger = logging.getLogger(__package__)
     setup_logger()
@@ -629,7 +636,8 @@ def ddp_train_nerf(rank, args):
             torch.save(to_save, fpath)
 
     # clean up for multi-processing
-    cleanup()
+    if one_card == False:
+        cleanup()
 
 
 def config_parser():
@@ -706,6 +714,8 @@ def config_parser():
     # multiprocess learning
     parser.add_argument("--world_size", type=int, default='-1',
                         help='number of processes')
+    parser.add_argument('--local_rank', default=-1, type=int,
+                        help='node rank for distributed training')
 
     # optimize autoexposure
     parser.add_argument("--optim_autoexpo", action='store_true',
@@ -751,12 +761,29 @@ def train():
     if args.world_size == -1:
         args.world_size = torch.cuda.device_count()
         logger.info('Using # gpus: {}'.format(args.world_size))
+
+    # args.world_size = 1
+
     torch.multiprocessing.spawn(ddp_train_nerf,
                                 args=(args,),
                                 nprocs=args.world_size,
                                 join=True)
 
+def train_one_card():
+    parser = config_parser()
+    args = parser.parse_args()
+    if 'SLURM_JOB_ID' in os.environ:
+        args.slurmjob = os.environ['SLURM_JOB_ID']
+    logger.info(parser.format_values())
+
+    if args.world_size == -1:
+        args.world_size = torch.cuda.device_count()
+        logger.info('Using # gpus: {}'.format(1))
+
+    args.world_size = 1
+    ddp_train_nerf(rank=args.local_rank, args=args, one_card=True)
 
 if __name__ == '__main__':
     setup_logger()
-    train()
+    # train()
+    train_one_card()
