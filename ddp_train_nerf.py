@@ -762,7 +762,7 @@ def train():
         args.world_size = torch.cuda.device_count()
         logger.info('Using # gpus: {}'.format(args.world_size))
 
-    # args.world_size = 1
+    args.world_size = 4
 
     torch.multiprocessing.spawn(ddp_train_nerf,
                                 args=(args,),
@@ -785,5 +785,5 @@ def train_one_card():
 
 if __name__ == '__main__':
     setup_logger()
-    # train()
-    train_one_card()
+    train()
+    # train_one_card()
