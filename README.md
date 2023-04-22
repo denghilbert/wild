@@ -1,3 +1,4 @@
+I just borrowed this repo from "NeRF for Outdoor" for some experiments!
 ##### NeRF for Outdoor Scene Relighting
 [Viktor Rudnev](https://twitter.com/realr00tman), [Mohamed Elgharib](https://people.mpi-inf.mpg.de/~elgharib/), [William Smith](https://www-users.cs.york.ac.uk/wsmith/), [Lingjie Liu](https://lingjie0206.github.io/), [Vladislav Golyanik](https://people.mpi-inf.mpg.de/~golyanik/), [Christian Theobalt](https://www.mpi-inf.mpg.de/~theobalt/)
 # a modifi verison
