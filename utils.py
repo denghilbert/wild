@@ -40,6 +40,11 @@ import matplotlib as mpl
 from matplotlib import cm
 import cv2
 
+def save_image(output_dir, image):
+
+    cv2.imwrite(output_dir, image)
+
+    return True
 
 def get_vertical_colorbar(h, vmin, vmax, cmap_name='jet', label=None):
     fig = Figure(figsize=(1.2, 8), dpi=100)

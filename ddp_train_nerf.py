@@ -5,17 +5,34 @@ import torch.distributed
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing
 import os
+import sys
+import pdb
 from collections import OrderedDict
 from ddp_model import NerfNetWithAutoExpo
 import time
 from data_loader_split import load_data_split
 import numpy as np
 from tensorboardX import SummaryWriter
-from utils import img2mse, mse2psnr, img_HWC2CHW, colorize, TINY_NUMBER
+from utils import img2mse, mse2psnr, img_HWC2CHW, colorize, TINY_NUMBER, save_image
 import logging
 import json
 
 logger = logging.getLogger(__package__)
+
+
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 
 
 def setup_logger():
@@ -249,57 +266,70 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
         return None
 
 
-def log_view_to_tb(writer, global_step, log_data, gt_img, mask, prefix=''):
+def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix=''):
     rgb_im = img_HWC2CHW(torch.from_numpy(gt_img))
-    writer.add_image(prefix + 'rgb_gt', rgb_im, global_step)
+    # writer.add_image(prefix + 'rgb_gt', rgb_im, global_step)
+
+    save_image(output_dir + prefix + 'rgb_gt.png', gt_img)
 
     for m in range(len(log_data)):
-        rgb_im = img_HWC2CHW(log_data[m]['rgb'])
+        rgb_im = (log_data[m]['rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
+        # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_rgb.png'.format(m), rgb_im.numpy())
 
-        purergb_im = img_HWC2CHW(log_data[m]['pure_rgb'])
+        purergb_im = (log_data[m]['pure_rgb'])
         purergb_im = torch.clamp(purergb_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/purergb'.format(m), purergb_im, global_step)
+        # writer.add_image(prefix + 'level_{}/purergb'.format(m), purergb_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_purergb.png'.format(m), purergb_im.numpy())
 
-        shadow_im = img_HWC2CHW(log_data[m]['shadow'])
+        shadow_im = (log_data[m]['shadow'])
         shadow_im = torch.clamp(shadow_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/shadow'.format(m), shadow_im, global_step)
+        # writer.add_image(prefix + 'level_{}/shadow'.format(m), shadow_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_shadow.png'.format(m), shadow_im.numpy())
 
-        albedo_im = img_HWC2CHW(log_data[m]['fg_albedo'])
+        albedo_im = (log_data[m]['fg_albedo'])
         albedo_im = torch.clamp(albedo_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/fg_albedo'.format(m), albedo_im, global_step)
+        # writer.add_image(prefix + 'level_{}/fg_albedo'.format(m), albedo_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_fg_albedo.png'.format(m), albedo_im.numpy())
 
-        rgb_im = img_HWC2CHW(log_data[m]['fg_rgb'])
+        rgb_im = (log_data[m]['fg_rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/fg_rgb'.format(m), rgb_im, global_step)
+        # writer.add_image(prefix + 'level_{}/fg_rgb'.format(m), rgb_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_fg_rgb.png'.format(m), rgb_im.numpy())
 
         depth = log_data[m]['fg_depth']
-        depth_im = img_HWC2CHW(colorize(depth, cmap_name='jet', append_cbar=True,
-                                        mask=mask))
-        writer.add_image(prefix + 'level_{}/fg_depth'.format(m), depth_im, global_step)
+        depth_im = (colorize(depth, cmap_name='jet', append_cbar=True, mask=mask))
+        # writer.add_image(prefix + 'level_{}/fg_depth'.format(m), depth_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_fg_depth.png'.format(m), depth_im.numpy())
 
-        normal_im = img_HWC2CHW(log_data[m]['fg_normal'])
+        normal_im = (log_data[m]['fg_normal'])
         normal_im = (normal_im + 1) / 2
         normal_im = torch.clamp(normal_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
+        # writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_fg_normal.png'.format(m), normal_im.numpy())
 
-        irradiance_im = img_HWC2CHW(log_data[m]['irradiance'])
+        irradiance_im = (log_data[m]['irradiance'])
         irradiance_im = irradiance_im / max(1.0, irradiance_im.max().item())
         irradiance_im = torch.clamp(irradiance_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/fg_irradiance'.format(m), irradiance_im, global_step)
+        # writer.add_image(prefix + 'level_{}/fg_irradiance'.format(m), irradiance_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_fg_irradiance.png'.format(m), irradiance_im.numpy())
 
-        rgb_im = img_HWC2CHW(log_data[m]['bg_rgb'])
+        rgb_im = (log_data[m]['bg_rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
-        writer.add_image(prefix + 'level_{}/bg_rgb'.format(m), rgb_im, global_step)
+        # writer.add_image(prefix + 'level_{}/bg_rgb'.format(m), rgb_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_bg_rgb.png'.format(m), rgb_im.numpy())
+
         depth = log_data[m]['bg_depth']
-        depth_im = img_HWC2CHW(colorize(depth, cmap_name='jet', append_cbar=True,
-                                        mask=mask))
-        writer.add_image(prefix + 'level_{}/bg_depth'.format(m), depth_im, global_step)
+        depth_im = (colorize(depth, cmap_name='jet', append_cbar=True, mask=mask))
+        # writer.add_image(prefix + 'level_{}/bg_depth'.format(m), depth_im, global_step)
+        save_image(output_dir + prefix + 'level_{}_bg_depth.png'.format(m), depth_im.numpy())
+
         bg_lambda = log_data[m]['bg_lambda']
-        bg_lambda_im = img_HWC2CHW(colorize(bg_lambda, cmap_name='hot', append_cbar=True,
-                                            mask=mask))
-        writer.add_image(prefix + 'level_{}/bg_lambda'.format(m), bg_lambda_im, global_step)
+        bg_lambda_im = (colorize(bg_lambda, cmap_name='hot', append_cbar=True,  mask=mask))
+        # writer.add_image(prefix + 'level_{}/bg_lambda'.format(m), bg_lambda_im, global_step)
+        save_image(output_dir + prefix + 'evel_{}_bg_lambda.png'.format(m), bg_lambda_im.numpy())
+
 
 
 def setup(rank, world_size):
@@ -370,6 +400,7 @@ def create_nerf(rank, args):
 
     ckpts = sorted(ckpts, key=path2iter)
     logger.info('Found ckpts: {}'.format(ckpts))
+
     if len(ckpts) > 0 and not args.no_reload:
         fpath = ckpts[-1]
         logger.info('Reloading from: {}'.format(fpath))
@@ -491,6 +522,8 @@ def ddp_train_nerf(rank, args, one_card=False):
     ##### only main process should do the logging
     if rank == 0:
         writer = SummaryWriter(os.path.join(args.basedir, args.expname))
+    # overall loss writer
+    writer1 = SummaryWriter(os.path.join(args.basedir, args.expname))
 
     # start training
     what_val_to_log = 0  # helper variable for parallel rendering of a image
@@ -574,9 +607,9 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
                 loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1)
-            scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
-            scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
-            scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
+            # scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
+            # scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
+            # scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
             loss.backward()
             optim.step()
 
@@ -595,19 +628,29 @@ def ddp_train_nerf(rank, args, one_card=False):
                 writer.add_scalar(k, scalars_to_log[k], global_step)
             logger.info(logstr)
 
+
+
         ### each process should do this; but only main process merges the results
         if global_step % args.i_img == 0 or global_step == start + 1:
             #### critical: make sure each process is working on the same random image
             time0 = time.time()
             idx = what_val_to_log % len(val_ray_samplers)
+
+            # create dir of validation visualization
+            output_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step))
+            os.makedirs(output_dir, exist_ok=True)
+
+
             log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx], args.chunk_size,
                                            global_step)
             what_val_to_log += 1
             dt = time.time() - time0
+
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
-                log_view_to_tb(writer, global_step, log_data, gt_img=val_ray_samplers[idx].get_img(), mask=None,
-                               prefix='val/')
+                log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step, log_data,
+                               gt_img=val_ray_samplers[idx].get_img(), mask=None,
+                               prefix='/val_')
 
             time0 = time.time()
             idx = what_train_to_log % len(ray_samplers)
@@ -617,8 +660,9 @@ def ddp_train_nerf(rank, args, one_card=False):
             dt = time.time() - time0
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random training view in {} seconds'.format(dt))
-                log_view_to_tb(writer, global_step, log_data, gt_img=ray_samplers[idx].get_img(), mask=None,
-                               prefix='train/')
+                log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step, log_data,
+                               gt_img=ray_samplers[idx].get_img(), mask=None,
+                               prefix='/train_')
 
             del log_data
             torch.cuda.empty_cache()
@@ -761,8 +805,6 @@ def train():
     if args.world_size == -1:
         args.world_size = torch.cuda.device_count()
         logger.info('Using # gpus: {}'.format(args.world_size))
-
-    args.world_size = 4
 
     torch.multiprocessing.spawn(ddp_train_nerf,
                                 args=(args,),
