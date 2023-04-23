@@ -521,8 +521,9 @@ def ddp_train_nerf(rank, args, one_card=False):
     ##### only main process should do the logging
     if rank == 0:
         writer = SummaryWriter(os.path.join(args.basedir, args.expname))
-    # overall loss writer
-    writer1 = SummaryWriter(os.path.join(args.basedir, args.expname))
+        # overall loss writer
+        os.makedirs(os.path.join(args.basedir, args.expname, 'loss_curve'), exist_ok=True)
+        writer_loss = SummaryWriter(os.path.join(args.basedir, args.expname, 'loss_curve'))
 
     # start training
     what_val_to_log = 0  # helper variable for parallel rendering of a image
@@ -606,6 +607,12 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
                 loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1)
+
+            # record loss curve
+            if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
+                writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'pnsr', mse2psnr(rgb_loss.item()), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
             # scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
             # scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
             # scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
@@ -619,6 +626,7 @@ def ddp_train_nerf(rank, args, one_card=False):
         dt = time.time() - time0
         scalars_to_log['iter_time'] = dt
 
+        # ForkedPdb().set_trace()
         ### only main process should do the logging
         if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
             logstr = '{} step: {} '.format(args.expname, global_step)
@@ -626,7 +634,6 @@ def ddp_train_nerf(rank, args, one_card=False):
                 logstr += ' {}: {:.6f}'.format(k, scalars_to_log[k])
                 writer.add_scalar(k, scalars_to_log[k], global_step)
             logger.info(logstr)
-
 
 
         ### each process should do this; but only main process merges the results
