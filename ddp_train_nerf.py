@@ -269,66 +269,65 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
 def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix=''):
     rgb_im = img_HWC2CHW(torch.from_numpy(gt_img))
     # writer.add_image(prefix + 'rgb_gt', rgb_im, global_step)
-
-    save_image(output_dir + prefix + 'rgb_gt.png', gt_img)
+    save_image(output_dir + prefix + 'rgb_gt.png', 255*gt_img)
 
     for m in range(len(log_data)):
         rgb_im = (log_data[m]['rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_rgb.png'.format(m), rgb_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_rgb.png'.format(m), 255*rgb_im.numpy())
 
         purergb_im = (log_data[m]['pure_rgb'])
         purergb_im = torch.clamp(purergb_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/purergb'.format(m), purergb_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_purergb.png'.format(m), purergb_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_purergb.png'.format(m), 255*purergb_im.numpy())
 
         shadow_im = (log_data[m]['shadow'])
         shadow_im = torch.clamp(shadow_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/shadow'.format(m), shadow_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_shadow.png'.format(m), shadow_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_shadow.png'.format(m), 255*shadow_im.numpy())
 
         albedo_im = (log_data[m]['fg_albedo'])
         albedo_im = torch.clamp(albedo_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/fg_albedo'.format(m), albedo_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_fg_albedo.png'.format(m), albedo_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_fg_albedo.png'.format(m), 255*albedo_im.numpy())
 
         rgb_im = (log_data[m]['fg_rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/fg_rgb'.format(m), rgb_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_fg_rgb.png'.format(m), rgb_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_fg_rgb.png'.format(m), 255*rgb_im.numpy())
 
         depth = log_data[m]['fg_depth']
         depth_im = (colorize(depth, cmap_name='jet', append_cbar=True, mask=mask))
         # writer.add_image(prefix + 'level_{}/fg_depth'.format(m), depth_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_fg_depth.png'.format(m), depth_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_fg_depth.png'.format(m), 255*depth_im.numpy())
 
         normal_im = (log_data[m]['fg_normal'])
         normal_im = (normal_im + 1) / 2
         normal_im = torch.clamp(normal_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_fg_normal.png'.format(m), normal_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_fg_normal.png'.format(m), 255*normal_im.numpy())
 
         irradiance_im = (log_data[m]['irradiance'])
         irradiance_im = irradiance_im / max(1.0, irradiance_im.max().item())
         irradiance_im = torch.clamp(irradiance_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/fg_irradiance'.format(m), irradiance_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_fg_irradiance.png'.format(m), irradiance_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_fg_irradiance.png'.format(m), 255*irradiance_im.numpy())
 
         rgb_im = (log_data[m]['bg_rgb'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/bg_rgb'.format(m), rgb_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_bg_rgb.png'.format(m), rgb_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_bg_rgb.png'.format(m), 255*rgb_im.numpy())
 
         depth = log_data[m]['bg_depth']
         depth_im = (colorize(depth, cmap_name='jet', append_cbar=True, mask=mask))
         # writer.add_image(prefix + 'level_{}/bg_depth'.format(m), depth_im, global_step)
-        save_image(output_dir + prefix + 'level_{}_bg_depth.png'.format(m), depth_im.numpy())
+        save_image(output_dir + prefix + 'level_{}_bg_depth.png'.format(m), 255*depth_im.numpy())
 
         bg_lambda = log_data[m]['bg_lambda']
         bg_lambda_im = (colorize(bg_lambda, cmap_name='hot', append_cbar=True,  mask=mask))
         # writer.add_image(prefix + 'level_{}/bg_lambda'.format(m), bg_lambda_im, global_step)
-        save_image(output_dir + prefix + 'evel_{}_bg_lambda.png'.format(m), bg_lambda_im.numpy())
+        save_image(output_dir + prefix + 'evel_{}_bg_lambda.png'.format(m), 255*bg_lambda_im.numpy())
 
 
 
