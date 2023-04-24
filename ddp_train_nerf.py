@@ -652,11 +652,17 @@ def ddp_train_nerf(rank, args, one_card=False):
             what_val_to_log += 1
             dt = time.time() - time0
 
+
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
-                log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step, log_data,
-                               gt_img=val_ray_samplers[idx].get_img(), mask=None,
-                               prefix='/val_')
+                if 'home' not in output_dir:
+                    log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step,
+                                   log_data, gt_img=val_ray_samplers[idx].get_img(),
+                                   mask=None, prefix='/val_')
+                else:
+                    log_view_to_tb(output_dir, writer, global_step,
+                                   log_data, gt_img=val_ray_samplers[idx].get_img(),
+                                   mask=None, prefix='/val_')
 
             time0 = time.time()
             idx = what_train_to_log % len(ray_samplers)
@@ -666,9 +672,14 @@ def ddp_train_nerf(rank, args, one_card=False):
             dt = time.time() - time0
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random training view in {} seconds'.format(dt))
-                log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step, log_data,
-                               gt_img=ray_samplers[idx].get_img(), mask=None,
-                               prefix='/train_')
+                if 'home' not in output_dir:
+                    log_view_to_tb(os.getcwd() + '/' + output_dir, writer, global_step,
+                                   log_data, gt_img=ray_samplers[idx].get_img(),
+                                   mask=None, prefix='/train_')
+                else:
+                    log_view_to_tb(output_dir, writer, global_step,
+                                   log_data, gt_img=ray_samplers[idx].get_img(),
+                                   mask=None, prefix='/train_')
 
             del log_data
             torch.cuda.empty_cache()
