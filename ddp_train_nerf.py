@@ -637,6 +637,18 @@ def ddp_train_nerf(rank, args, one_card=False):
                 writer.add_scalar(k, scalars_to_log[k], global_step)
             logger.info(logstr)
 
+        if rank == 0 and (global_step % args.i_weights == 0 and global_step > 0):
+            # saving checkpoints and logging
+            fpath = os.path.join(args.basedir, args.expname, 'model_{:06d}.pth'.format(global_step))
+            to_save = OrderedDict()
+            for m in range(models['cascade_level']):
+                name = 'net_{}'.format(m)
+                to_save[name] = models[name].state_dict()
+
+                name = 'optim_{}'.format(m)
+                to_save[name] = models[name].state_dict()
+            torch.save(to_save, fpath)
+
 
         ### each process should do this; but only main process merges the results
         if global_step % args.i_img == 0 or global_step == start + 1:
@@ -649,6 +661,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             os.makedirs(output_dir, exist_ok=True)
 
             # change chunk_size for validation on 1080Ti
+            ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
                     torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
                 logger.info('change chunk_size for validation part according to 12G gpu')
@@ -657,15 +670,8 @@ def ddp_train_nerf(rank, args, one_card=False):
             log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
                                            args.chunk_size, global_step)
 
-            if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
-                logger.info('change back!')
-                args.chunk_size = int(args.chunk_size * 4)
-            ###############################################
-
             what_val_to_log += 1
             dt = time.time() - time0
-
 
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
@@ -680,8 +686,17 @@ def ddp_train_nerf(rank, args, one_card=False):
 
             time0 = time.time()
             idx = what_train_to_log % len(ray_samplers)
+
             log_data = render_single_image(rank, args.world_size, models, ray_samplers[idx], args.chunk_size,
                                            global_step)
+
+            if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                logger.info('change back!')
+                args.chunk_size = int(args.chunk_size * 4)
+            # change back chunk_size for validation on 1080Ti
+            ###############################################
+
             what_train_to_log += 1
             dt = time.time() - time0
             if rank == 0:  # only main process should do this
@@ -698,17 +713,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             del log_data
             torch.cuda.empty_cache()
 
-        if rank == 0 and (global_step % args.i_weights == 0 and global_step > 0):
-            # saving checkpoints and logging
-            fpath = os.path.join(args.basedir, args.expname, 'model_{:06d}.pth'.format(global_step))
-            to_save = OrderedDict()
-            for m in range(models['cascade_level']):
-                name = 'net_{}'.format(m)
-                to_save[name] = models[name].state_dict()
 
-                name = 'optim_{}'.format(m)
-                to_save[name] = models[name].state_dict()
-            torch.save(to_save, fpath)
 
     # clean up for multi-processing
     if one_card == False:
