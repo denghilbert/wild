@@ -475,7 +475,9 @@ def ddp_train_nerf(rank, args, one_card=False):
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9:
         logger.info('setting batch size according to 12G gpu')
         args.N_rand = 512
+        # args.N_rand = 128
         args.chunk_size = int(4096//1.15)
+        # args.chunk_size = 1024
     else:
         logger.info('setting batch size according to 4G gpu')
         args.N_rand = 128
@@ -646,9 +648,21 @@ def ddp_train_nerf(rank, args, one_card=False):
             output_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step))
             os.makedirs(output_dir, exist_ok=True)
 
+            # change chunk_size for validation on 1080Ti
+            if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                logger.info('change chunk_size for validation part according to 12G gpu')
+                args.chunk_size = int(args.chunk_size / 4)
 
-            log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx], args.chunk_size,
-                                           global_step)
+            log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
+                                           args.chunk_size, global_step)
+
+            if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                logger.info('change back!')
+                args.chunk_size = int(args.chunk_size * 4)
+            ###############################################
+
             what_val_to_log += 1
             dt = time.time() - time0
 
