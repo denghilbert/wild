@@ -308,6 +308,13 @@ def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, pref
         # writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
         save_image(output_dir + prefix + 'level_{}_fg_normal.png'.format(m), 255*normal_im.numpy())
 
+        # for debugging
+        # normal_im = (log_data[m]['mean_normal_grad'])
+        # normal_im = (normal_im + 1) / 2
+        # normal_im = torch.clamp(normal_im, min=0., max=1.)  # just in case diffuse+specular>1
+        # # writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
+        # save_image(output_dir + prefix + 'level_{}_fg_normal_smooth.png'.format(m), 255*normal_im.numpy())
+
         irradiance_im = (log_data[m]['irradiance'])
         irradiance_im = irradiance_im / max(1.0, irradiance_im.max().item())
         irradiance_im = torch.clamp(irradiance_im, min=0., max=1.)  # just in case diffuse+specular>1
@@ -329,6 +336,13 @@ def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, pref
         # writer.add_image(prefix + 'level_{}/bg_lambda'.format(m), bg_lambda_im, global_step)
         save_image(output_dir + prefix + 'evel_{}_bg_lambda.png'.format(m), 255*bg_lambda_im.numpy())
 
+# eikonal for normal smoothness
+def get_eikonal_loss(mean_normal_grad):
+    if mean_normal_grad.shape[0] == 0:
+        return torch.tensor(0.0).cuda().float()
+
+    eikonal_loss = ((mean_normal_grad.norm(2, dim=1) - 1) ** 2).mean()
+    return eikonal_loss
 
 
 def setup(rank, world_size):
@@ -581,15 +595,17 @@ def ddp_train_nerf(rank, args, one_card=False):
                 bg_depth, _ = torch.sort(torch.cat((bg_depth, bg_depth_samples), dim=-1))
 
             optim.zero_grad()
-            ret = net(ray_batch['ray_o'], ray_batch['ray_d'], fg_far_depth, fg_depth, bg_depth, global_step,
-                      img_name=ray_batch['img_name'])
+            ret = net(ray_batch['ray_o'], ray_batch['ray_d'], fg_far_depth, fg_depth,
+                      bg_depth, global_step, img_name=ray_batch['img_name'])
             all_rets.append(ret)
 
             rgb_gt = ray_batch['rgb'].to(rank)
+
             if ray_batch['mask'] is not None:
                 mask = ray_batch['mask'].to(rank)
             else:
                 mask = None
+
             if 'autoexpo' in ret:
                 assert (False)
                 scale, shift = ret['autoexpo']
@@ -598,6 +614,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 # rgb_gt = scale * rgb_gt + shift
                 rgb_pred = (ret['rgb'] - shift) / scale
                 rgb_loss = img2mse(rgb_pred, rgb_gt)
+
                 loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift))
             else:
                 # zeros = ret['rgb'] * 0
@@ -608,21 +625,23 @@ def ddp_train_nerf(rank, args, one_card=False):
                 shadow_reg = torch.mean((1 - ret['shadow']) ** 2)
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
-                loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1)
 
+                loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1)
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'pnsr', mse2psnr(rgb_loss.item()), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
-            # scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
-            # scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
-            # scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
+                scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
+                scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
+                scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
+
+
             loss.backward()
             optim.step()
 
             # # clean unused memory
-            # torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
         ### end of core optimization loop
         dt = time.time() - time0
@@ -648,7 +667,6 @@ def ddp_train_nerf(rank, args, one_card=False):
                 name = 'optim_{}'.format(m)
                 to_save[name] = models[name].state_dict()
             torch.save(to_save, fpath)
-
 
         ### each process should do this; but only main process merges the results
         if global_step % args.i_img == 0 or global_step == start + 1:
@@ -712,7 +730,6 @@ def ddp_train_nerf(rank, args, one_card=False):
 
             del log_data
             torch.cuda.empty_cache()
-
 
 
     # clean up for multi-processing
@@ -827,6 +844,9 @@ def config_parser():
     parser.add_argument("--i_print", type=int, default=100, help='frequency of console printout and metric logging')
     parser.add_argument("--i_img", type=int, default=500, help='frequency of tensorboard image logging')
     parser.add_argument("--i_weights", type=int, default=10000, help='frequency of weight ckpt saving')
+
+    # youming options
+    parser.add_argument("--eikonal_loss_weight", type=float, default=0., help='eikonal_loss weight')
 
     return parser
 

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import glob
-import os
+import os, pdb, sys
 from utils import TINY_NUMBER, HUGE_NUMBER
 from collections import OrderedDict
 from nerf_network import Embedder, MLPNet
@@ -12,7 +12,19 @@ import logging
 
 logger = logging.getLogger(__package__)
 
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
 
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 ######################################################################################
 # wrapper to simplify the use of nerfnet
 ######################################################################################
@@ -134,6 +146,8 @@ class NerfNet(nn.Module):
                 grad_outputs=torch.ones_like(fg_raw['sigma'], requires_grad=False),
                 retain_graph=True,
                 create_graph=True)[0]
+
+
         # alpha blending
         fg_dists = fg_z_vals[..., 1:] - fg_z_vals[..., :-1]
         # account for view directions
@@ -150,12 +164,27 @@ class NerfNet(nn.Module):
         if not self.use_shadows:
             fg_shadow_map = fg_shadow_map * 0 + 1
 
+        # this will be returned for ekional loss calculation
+        weight = fg_weights.clone()
+        weight_move_one_right_step = torch.zeros(fg_weights.shape).cuda()
+        weight_move_one_right_step[:, 0:-1] = weight[:, 1:]
+        # faster change of density means closer to the surface (larger weight)
+        # to avoid values smaller than 0 we use torch.abs
+        diff_weight = torch.abs(weight - weight_move_one_right_step)
+        diff_weight = F.normalize(diff_weight, p=1, dim=-1)
+        mean_normal_grad = (fg_normal_map * diff_weight.unsqueeze(-1)).mean(-2)
+        mean_normal_grad = F.normalize(mean_normal_grad, p=2, dim=-1)
+
         fg_depth_map = torch.sum(fg_weights * fg_z_vals, dim=-1)  # [...,]
         # print(fg_pts.shape, fg_depth_map.shape, fg_raw['sigma'].shape)
+        ForkedPdb().set_trace()
         fg_normal_map = (fg_normal_map * fg_weights.unsqueeze(-1)).mean(-2)
         # fg_normal_map = fg_normal_map.mean(-2)
         fg_normal_map = F.normalize(fg_normal_map, p=2, dim=-1)
         # print(fg_normal_map.shape)
+
+
+
 
         # c1 = 0.429043
         # c2 = 0.511664
@@ -264,7 +293,9 @@ class NerfNet(nn.Module):
                            ('bg_rgb', bg_rgb_map.detach()),
                            ('bg_depth', bg_depth_map.detach()),
                            ('bg_lambda', bg_lambda.detach()),
-                           ('viewdir', viewdirs.detach())])
+                           ('viewdir', viewdirs.detach()),
+                           ('mean_normal_grad', mean_normal_grad.detach())
+                           ])
         return ret
 
 
