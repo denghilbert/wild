@@ -219,7 +219,7 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
 
             with torch.no_grad():
                 ret = net(ray_o, ray_d, fg_far_depth, fg_depth, bg_depth, iteration, img_name=ray_sampler.img_path if img_name is None else img_name,
-                          rot_angle=rot_angle)
+                          rot_angle=rot_angle, save_memory4validation=True)
 
             for key in ret:
                 if key not in ['fg_weights', 'bg_weights']:
@@ -626,15 +626,29 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
 
-                loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1)
+                if args.normal_loss_weight != -1:
+                    # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
+                    # important !!!
+                    fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
+                    fg_normal = ret['fg_normal'].unsqueeze(-2).expand(ret['fg_normal_map_postintegral'].shape)
+                    cosine = torch.sum(fg_normal_map_postintegral * fg_normal, dim=-1)
+                    normal_direction_loss = (((1 - cosine)**2) * ret['fg_weights']).mean()
+                    # normal_direction_loss = ((1 - cosine)) * ret['fg_weights']
+                else:
+                    normal_direction_loss = torch.tensor(0.0).cuda().float()
+
+                loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
+                       args.normal_loss_weight * normal_direction_loss
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'pnsr', mse2psnr(rgb_loss.item()), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'normal_direction_loss', normal_direction_loss.item(), global_step)
                 scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
                 scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
                 scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
+                scalars_to_log['level_{}/normal_direction_loss'.format(m)] = normal_direction_loss.item()
 
 
             loss.backward()
@@ -846,7 +860,7 @@ def config_parser():
     parser.add_argument("--i_weights", type=int, default=10000, help='frequency of weight ckpt saving')
 
     # youming options
-    parser.add_argument("--eikonal_loss_weight", type=float, default=0., help='eikonal_loss weight')
+    parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
 
     return parser
 

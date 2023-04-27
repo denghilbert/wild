@@ -107,7 +107,7 @@ class NerfNet(nn.Module):
         self.use_shadow_jitter = args.use_shadow_jitter
         self.use_shadows = args.use_shadows
 
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration):
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, save_memory4validation=False):
         '''
         :param ray_o, ray_d: [..., 3]
         :param fg_z_max: [...,]
@@ -147,6 +147,8 @@ class NerfNet(nn.Module):
                 retain_graph=True,
                 create_graph=True)[0]
 
+            fg_normal_map_postintegral = fg_normal_map.clone()
+            fg_normal_map_postintegral = F.normalize(fg_normal_map_postintegral, p=2, dim=-1)
 
         # alpha blending
         fg_dists = fg_z_vals[..., 1:] - fg_z_vals[..., :-1]
@@ -161,9 +163,12 @@ class NerfNet(nn.Module):
         fg_albedo_map = torch.sum(fg_weights.unsqueeze(-1) * fg_raw['rgb'], dim=-2)  # [..., 3]
         fg_shadow_map = torch.sum(fg_weights.unsqueeze(-1) * fg_raw['shadow'], dim=-2)  # [..., 3]
 
+
+
         if not self.use_shadows:
             fg_shadow_map = fg_shadow_map * 0 + 1
 
+        '''
         # this will be returned for ekional loss calculation
         weight = fg_weights.clone()
         weight_move_one_right_step = torch.zeros(fg_weights.shape).cuda()
@@ -174,10 +179,10 @@ class NerfNet(nn.Module):
         diff_weight = F.normalize(diff_weight, p=1, dim=-1)
         mean_normal_grad = (fg_normal_map * diff_weight.unsqueeze(-1)).mean(-2)
         mean_normal_grad = F.normalize(mean_normal_grad, p=2, dim=-1)
+        '''
 
         fg_depth_map = torch.sum(fg_weights * fg_z_vals, dim=-1)  # [...,]
         # print(fg_pts.shape, fg_depth_map.shape, fg_raw['sigma'].shape)
-        ForkedPdb().set_trace()
         fg_normal_map = (fg_normal_map * fg_weights.unsqueeze(-1)).mean(-2)
         # fg_normal_map = fg_normal_map.mean(-2)
         fg_normal_map = F.normalize(fg_normal_map, p=2, dim=-1)
@@ -279,23 +284,42 @@ class NerfNet(nn.Module):
             shadow_map = fg_shadow_map
             rgb_map = fg_rgb_map + bg_rgb_map * 0  # todo: enable bg later
 
-        ret = OrderedDict([('rgb', rgb_map),  # loss
-                           ('pure_rgb', pure_rgb_map),
-                           ('shadow', shadow_map),
-                           ('fg_weights', fg_weights),  # importance sampling
-                           ('bg_weights', bg_weights),  # importance sampling
-                           ('fg_rgb', fg_rgb_map),  # below are for logging
-                           ('fg_albedo', fg_albedo_map.detach()),
-                           ('fg_shadow', fg_shadow_map.detach()),
-                           ('fg_depth', fg_depth_map.detach()),
-                           ('fg_normal', fg_normal_map.detach()),
-                           ('irradiance', irradiance.detach()),
-                           ('bg_rgb', bg_rgb_map.detach()),
-                           ('bg_depth', bg_depth_map.detach()),
-                           ('bg_lambda', bg_lambda.detach()),
-                           ('viewdir', viewdirs.detach()),
-                           ('mean_normal_grad', mean_normal_grad.detach())
-                           ])
+        if save_memory4validation == True:
+            ret = OrderedDict([('rgb', rgb_map),  # loss
+                               ('pure_rgb', pure_rgb_map),
+                               ('shadow', shadow_map),
+                               ('fg_weights', fg_weights),  # importance sampling
+                               ('bg_weights', bg_weights),  # importance sampling
+                               ('fg_rgb', fg_rgb_map),  # below are for logging
+                               ('fg_albedo', fg_albedo_map.detach()),
+                               ('fg_shadow', fg_shadow_map.detach()),
+                               ('fg_depth', fg_depth_map.detach()),
+                               ('fg_normal', fg_normal_map.detach()),
+                               ('irradiance', irradiance.detach()),
+                               ('bg_rgb', bg_rgb_map.detach()),
+                               ('bg_depth', bg_depth_map.detach()),
+                               ('bg_lambda', bg_lambda.detach()),
+                               ('viewdir', viewdirs.detach()),
+                               ('fg_normal_map_postintegral', fg_normal_map_postintegral.detach()),
+                               ])
+        else:
+            ret = OrderedDict([('rgb', rgb_map),  # loss
+                               ('pure_rgb', pure_rgb_map),
+                               ('shadow', shadow_map),
+                               ('fg_weights', fg_weights),  # importance sampling
+                               ('bg_weights', bg_weights),  # importance sampling
+                               ('fg_rgb', fg_rgb_map),  # below are for logging
+                               ('fg_albedo', fg_albedo_map.detach()),
+                               ('fg_shadow', fg_shadow_map.detach()),
+                               ('fg_depth', fg_depth_map.detach()),
+                               ('fg_normal', fg_normal_map),
+                               ('irradiance', irradiance.detach()),
+                               ('bg_rgb', bg_rgb_map.detach()),
+                               ('bg_depth', bg_depth_map.detach()),
+                               ('bg_lambda', bg_lambda.detach()),
+                               ('viewdir', viewdirs.detach()),
+                               ('fg_normal_map_postintegral', fg_normal_map_postintegral),
+                               ])
         return ret
 
 
@@ -395,7 +419,7 @@ class NerfNetWithAutoExpo(nn.Module):
             # [0.2137442, -0.0547578, -0.3061700]
         ], dtype=torch.float32))
 
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None):
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None, save_memory4validation=False):
         '''
         :param ray_o, ray_d: [..., 3]
         :param fg_z_max: [...,]
@@ -476,7 +500,7 @@ class NerfNetWithAutoExpo(nn.Module):
             env = env.reshape(old_shape)
             # assert(env.shape == old_shape)
 
-        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration)
+        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, save_memory4validation=save_memory4validation)
         if self.optim_autoexpo and (img_name in self.autoexpo_params):
             autoexpo = self.autoexpo_params[img_name]
             scale = torch.abs(autoexpo[0]) + 0.5  # make sure scale is always positive
