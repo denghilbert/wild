@@ -345,7 +345,7 @@ def get_eikonal_loss(mean_normal_grad):
     return eikonal_loss
 
 
-def setup(rank, world_size):
+def setup(rank, world_size, master_port):
     # initialize the process group
     slurmjob = os.environ.get('SLURM_JOB_ID', '')
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -355,7 +355,8 @@ def setup(rank, world_size):
         torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
     else:
         try:
-            os.environ['MASTER_PORT'] = '12413'
+            # os.environ['MASTER_PORT'] = '12420'
+            os.environ['MASTER_PORT'] = str(master_port)
             logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on first try')
             torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
         except RuntimeError:
@@ -469,7 +470,7 @@ def create_nerf(rank, args):
 def ddp_train_nerf(rank, args, one_card=False):
     ###### set up multi-processing
     if one_card == False:
-        setup(rank, args.world_size)
+        setup(rank, args.world_size, args.master_port)
     else:
         os.environ['MASTER_PORT'] = '12413'
         torch.cuda.set_device(args.local_rank)
@@ -615,7 +616,19 @@ def ddp_train_nerf(rank, args, one_card=False):
                 rgb_pred = (ret['rgb'] - shift) / scale
                 rgb_loss = img2mse(rgb_pred, rgb_gt)
 
-                loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift))
+                if args.normal_loss_weight != -1:
+                    # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
+                    # important !!!
+                    fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
+                    fg_normal = ret['fg_normal'].unsqueeze(-2).expand(ret['fg_normal_map_postintegral'].shape)
+                    cosine = torch.sum(fg_normal_map_postintegral * fg_normal, dim=-1)
+                    normal_direction_loss = (((1 - cosine)**2) * ret['fg_weights']).mean()
+                    # normal_direction_loss = ((1 - cosine)) * ret['fg_weights']
+                else:
+                    normal_direction_loss = torch.tensor(0.0).cuda().float()
+
+                loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift)) + \
+                       args.normal_loss_weight * normal_direction_loss
             else:
                 # zeros = ret['rgb'] * 0
                 # rgb_loss = img2mse(ret['pure_rgb'], torch.min(rgb_gt/ret['shadow'], ones))
@@ -861,6 +874,8 @@ def config_parser():
 
     # youming options
     parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
+    parser.add_argument("--master_port", type=int, default=12222, help='master_port of the program')
+
 
     return parser
 
