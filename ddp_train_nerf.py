@@ -697,6 +697,7 @@ def ddp_train_nerf(rank, args, one_card=False):
 
         ### each process should do this; but only main process merges the results
         if global_step % args.i_img == 0 or global_step == start + 1:
+            # if global_step != 0:
             #### critical: make sure each process is working on the same random image
             time0 = time.time()
             idx = what_val_to_log % len(val_ray_samplers)
