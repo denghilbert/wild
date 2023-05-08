@@ -696,8 +696,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             torch.save(to_save, fpath)
 
         ### each process should do this; but only main process merges the results
-        if global_step % args.i_img == 0 or global_step == start + 1:
-            # if global_step != 0:
+        if (global_step % args.i_img == 0 and global_step != 0) or (global_step == start + 1 and args.start_val):
             #### critical: make sure each process is working on the same random image
             time0 = time.time()
             idx = what_val_to_log % len(val_ray_samplers)
@@ -709,9 +708,12 @@ def ddp_train_nerf(rank, args, one_card=False):
             # change chunk_size for validation on 1080Ti
             ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
                 logger.info('change chunk_size for validation part according to 12G gpu')
                 args.chunk_size = int(args.chunk_size / 4)
+            else:
+                logger.info('original chunk_size for validation part according to 24G gpu')
+
 
             log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
                                            args.chunk_size, global_step)
@@ -737,9 +739,11 @@ def ddp_train_nerf(rank, args, one_card=False):
                                            global_step)
 
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
                 logger.info('change back!')
                 args.chunk_size = int(args.chunk_size * 4)
+            else:
+                logger.info('original chunk_size for validation part according to 24G gpu')
             # change back chunk_size for validation on 1080Ti
             ###############################################
 
@@ -876,7 +880,7 @@ def config_parser():
     # youming options
     parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
     parser.add_argument("--master_port", type=int, default=12222, help='master_port of the program')
-
+    parser.add_argument("--start_val", default = False, action = "store_true", help = 'if reload, start validation at start+1 step')
 
     return parser
 

@@ -500,6 +500,7 @@ class NerfNetWithAutoExpo(nn.Module):
             env = env.reshape(old_shape)
             # assert(env.shape == old_shape)
 
+
         ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, save_memory4validation=save_memory4validation)
         if self.optim_autoexpo and (img_name in self.autoexpo_params):
             autoexpo = self.autoexpo_params[img_name]

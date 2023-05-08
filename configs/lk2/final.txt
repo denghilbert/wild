@@ -35,6 +35,6 @@ use_viewdirs = False
 activation = relu
 
 ### CONSOLE AND TENSORBOARD
-i_img = 5000
+i_img = 10000
 i_print = 100
-i_weights = 5000
+i_weights = 10000
