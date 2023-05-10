@@ -16,6 +16,7 @@ from tensorboardX import SummaryWriter
 from utils import img2mse, mse2psnr, img_HWC2CHW, colorize, TINY_NUMBER, save_image
 import logging
 import json
+import mcubes
 
 logger = logging.getLogger(__package__)
 
@@ -483,7 +484,7 @@ def ddp_train_nerf(rank, args, one_card=False):
 
     ###### decide chunk size according to gpu memory
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
-    if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 30:
+    if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
         logger.info('setting batch size according to 24G gpu')
         args.N_rand = 512
         args.chunk_size = 4096
@@ -564,6 +565,13 @@ def ddp_train_nerf(rank, args, one_card=False):
             optim = models['optim_{}'.format(m)]
             net = models['net_{}'.format(m)]
 
+            # li = [10000]
+            # for threshold in li:
+            # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-1.1, -1.1, -1.1]).cuda(), torch.tensor([1.1, 1.1, 1.1]).cuda(), 64, 5000, global_step)
+            # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/st.obj')
+            # ForkedPdb().set_trace()
+
+
             # sample depths
             N_samples = models['cascade_samples'][m]
             if m == 0:
@@ -573,6 +581,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                 step = (fg_far_depth - fg_near_depth) / (N_samples - 1)
                 fg_depth = torch.stack([fg_near_depth + i * step for i in range(N_samples)], dim=-1)  # [..., N_samples]
                 fg_depth = perturb_samples(fg_depth)  # random perturbation during training
+
+                ## debugging: to find far and close boundary
+                '''
+                far = ray_batch['ray_o'] + fg_far_depth.unsqueeze(-1) * ray_batch['ray_d']
+                close = ray_batch['ray_o'] + fg_near_depth.unsqueeze(-1) * ray_batch['ray_d']
+                ForkedPdb().set_trace()
+                '''
 
                 # background depth
                 bg_depth = torch.linspace(0., 1., N_samples).view(
@@ -627,8 +642,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                 else:
                     normal_direction_loss = torch.tensor(0.0).cuda().float()
 
-                loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift)) + \
-                       args.normal_loss_weight * normal_direction_loss
+                """just avoid trivial solution at first 10 step, I don't even know why it have such huge effect...."""
+                if global_step < 10:
+                    loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift)) + \
+                           (args.normal_loss_weight / 100000) * normal_direction_loss
+                else:
+                    loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift)) + \
+                           args.normal_loss_weight * normal_direction_loss
             else:
                 # zeros = ret['rgb'] * 0
                 # rgb_loss = img2mse(ret['pure_rgb'], torch.min(rgb_gt/ret['shadow'], ones))
@@ -650,8 +670,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                 else:
                     normal_direction_loss = torch.tensor(0.0).cuda().float()
 
-                loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                       args.normal_loss_weight * normal_direction_loss
+                """just avoid trivial solution at first 10 step, I don't even know why it have such huge effect...."""
+                if global_step < 10:
+                    loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
+                           (args.normal_loss_weight / 100000) * normal_direction_loss
+                else:
+                    loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
+                           args.normal_loss_weight * normal_direction_loss
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
@@ -709,6 +734,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
                     torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30: # two training processes on 3090
                 logger.info('change chunk_size for validation part according to 12G gpu')
                 args.chunk_size = int(args.chunk_size / 4)
             else:
@@ -740,6 +766,7 @@ def ddp_train_nerf(rank, args, one_card=False):
 
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
                     torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
                 logger.info('change back!')
                 args.chunk_size = int(args.chunk_size * 4)
             else:
@@ -916,6 +943,12 @@ def train_one_card():
     ddp_train_nerf(rank=args.local_rank, args=args, one_card=True)
 
 if __name__ == '__main__':
+    # u = np.ones((2, 2, 2), dtype=np.float32)
+    # u[u==1] = 100
+    # u[0][0][0] = 10
+    # vertices, triangles = mcubes.marching_cubes(u, 50)
+    # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/tri.obj')
+    # ForkedPdb().set_trace()
     setup_logger()
     train()
     # train_one_card()

@@ -8,6 +8,20 @@ from collections import OrderedDict
 import logging
 logger = logging.getLogger(__package__)
 
+import pdb, sys
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 
 class Embedder(nn.Module):
     def __init__(self, input_dim, max_freq_log2, N_freqs,
@@ -191,7 +205,7 @@ class MLPNet(nn.Module):
         shadow_layers.append(nn.Sigmoid())     # shadow values are normalized to [0, 1]
         self.shadow_layers = nn.Sequential(*shadow_layers)
 
-    def forward(self, input):
+    def forward(self, input, mesh_sigma=False):
         '''
         :param input: [..., input_ch+input_ch_viewdirs]
         :return [..., 4]
@@ -207,6 +221,10 @@ class MLPNet(nn.Module):
 
         sigma = self.sigma_layers(base)
         sigma = torch.abs(sigma)
+
+        # for mesh reconstruction
+        if mesh_sigma == True:
+            return sigma
 
         base_remap = self.base_remap_layers(base)
         input_viewdirs = input[..., -self.input_ch_viewdirs:]
@@ -227,3 +245,4 @@ class MLPNet(nn.Module):
             ret = OrderedDict([('rgb', rgb),
                                ('sigma', sigma.squeeze(-1))])
         return ret
+

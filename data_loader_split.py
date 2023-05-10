@@ -114,7 +114,7 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
         else:
             H, W = 775, 1044
             print('Couldn\'t find', img_files[i], ', using img_size=', W, H)
-
+        # ForkedPdb().set_trace()
         ray_samplers.append(RaySamplerSingleImage(H=H, W=W, intrinsics=intrinsics, c2w=pose,
                                                   img_path=img_files[i],
                                                   mask_path=mask_files[i],

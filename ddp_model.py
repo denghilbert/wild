@@ -9,6 +9,7 @@ from collections import OrderedDict
 from nerf_network import Embedder, MLPNet
 from sph_util import illuminate_vec, rotate_env
 import logging
+import mcubes
 
 logger = logging.getLogger(__package__)
 
@@ -134,10 +135,11 @@ class NerfNet(nn.Module):
         with torch.enable_grad():
             fg_pts = fg_ray_o + fg_z_vals.unsqueeze(-1) * fg_ray_d
             fg_pts.requires_grad_(True)
-            input = torch.cat((self.fg_embedder_position(fg_pts, iteration),
-                               fg_sph,
-                               self.fg_embedder_viewdir(fg_viewdirs, iteration)), dim=-1)
+
+            input = torch.cat((self.fg_embedder_position(fg_pts, iteration), fg_sph, self.fg_embedder_viewdir(fg_viewdirs, iteration)), dim=-1)
             fg_raw = self.fg_net(input)
+            # ForkedPdb().set_trace()
+
             # sigmamasked = fg_raw['sigma']*(fg_raw['sigma'] < 4.0)
             # fg_raw['sigma'] = fg_raw['sigma'] - sigmamasked
             fg_normal_map = torch.autograd.grad(
@@ -164,7 +166,6 @@ class NerfNet(nn.Module):
         fg_shadow_map = torch.sum(fg_weights.unsqueeze(-1) * fg_raw['shadow'], dim=-2)  # [..., 3]
 
 
-
         if not self.use_shadows:
             fg_shadow_map = fg_shadow_map * 0 + 1
 
@@ -187,8 +188,6 @@ class NerfNet(nn.Module):
         # fg_normal_map = fg_normal_map.mean(-2)
         fg_normal_map = F.normalize(fg_normal_map, p=2, dim=-1)
         # print(fg_normal_map.shape)
-
-
 
 
         # c1 = 0.429043
@@ -321,6 +320,59 @@ class NerfNet(nn.Module):
                                ('fg_normal_map_postintegral', fg_normal_map_postintegral),
                                ])
         return ret
+
+
+    def extract_fields(self, bound_min, bound_max, resolution, query_func):
+        N = 128
+        X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
+        Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
+        Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
+
+        u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
+
+        with torch.no_grad():
+            for xi, xs in enumerate(X):
+                for yi, ys in enumerate(Y):
+                    for zi, zs in enumerate(Z):
+                        xx, yy, zz = torch.meshgrid(xs, ys, zs)
+                        pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
+                        val = query_func(pts.cuda()).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
+                        u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
+        return u
+
+    def extract_geometry(self, bound_min, bound_max, resolution, threshold, query_func):
+        print('threshold: {}'.format(threshold))
+        field = self.extract_fields(bound_min, bound_max, resolution, query_func)
+        # import cv2
+        # for i in range(0, 63):
+        #     t1 = field[:, :, i]
+        #     t1[t1>1000] = 1000
+        #     cv2.imwrite("/home/youmingdeng/stcut/test{}.jpg".format(i), t1 * 255 / 1000)
+        ForkedPdb().set_trace()
+        iso_level = extract_iso_level(field, 32)
+        vertices, triangles = mcubes.marching_cubes(field, threshold)
+        b_max_np = bound_max.detach().cpu().numpy()
+        b_min_np = bound_min.detach().cpu().numpy()
+        vertices = vertices / (resolution - 1.0) * (b_max_np - b_min_np)[None, :] + b_min_np[None, :]
+        return vertices, triangles
+
+    def extract_mesh(self, bound_min, bound_max, resolution, threshold=0.0, iteration=0):
+        return self.extract_geometry(bound_min,
+                                bound_max,
+                                resolution=resolution,
+                                threshold=threshold,
+                                query_func=lambda pts: self.fg_net(self.fg_embedder_position(pts, iteration), mesh_sigma=True))
+
+def extract_iso_level(density, iso_level):
+    # Density boundaries
+    min_a, max_a, std_a = density.min(), density.max(), density.std()
+
+    # Adaptive iso level
+    iso_value = min(max(iso_level, min_a + std_a), max_a - std_a)
+    print(f"Min density {min_a}, Max density: {max_a}, Mean density {density.mean()}")
+    print(f"Querying based on iso level: {iso_value}")
+
+    return iso_value
 
 
 def remap_name(name):
@@ -509,3 +561,4 @@ class NerfNetWithAutoExpo(nn.Module):
             ret['autoexpo'] = (scale, shift)
 
         return ret
+
