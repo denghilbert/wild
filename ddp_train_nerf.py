@@ -17,6 +17,9 @@ from utils import img2mse, mse2psnr, img_HWC2CHW, colorize, TINY_NUMBER, save_im
 import logging
 import json
 import mcubes
+from demo_projSH_rotSH import Rotation
+import imageio
+
 
 logger = logging.getLogger(__package__)
 
@@ -266,6 +269,134 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
     else:
         return None
 
+def relight_rotation_single_image(rank, world_size, models, ray_sampler, chunk_size, iteration, rot_angle=0, img_name=None):
+    ##### parallel rendering of a single image
+    ray_batch = ray_sampler.get_all()
+
+    fixed = 0
+    if (ray_batch['ray_d'].shape[0] // world_size) * world_size != ray_batch['ray_d'].shape[0]:
+        fixed = world_size - (ray_batch['ray_d'].shape[0] % world_size)
+        for p in ray_batch:
+            if ray_batch[p] is not None:
+                ray_batch[p] = torch.cat((ray_batch[p], ray_batch[p][-fixed:]), dim=0)
+    #     raise Exception('Number of pixels in the image is not divisible by the number of GPUs!\n\t# pixels: {}\n\t# GPUs: {}'.format(ray_batch['ray_d'].shape[0],
+    #                                                                                                                                  world_size))
+
+    # split into ranks; make sure different processes don't overlap
+    rank_split_sizes = [ray_batch['ray_d'].shape[0] // world_size, ] * world_size
+    rank_split_sizes[-1] = ray_batch['ray_d'].shape[0] - sum(rank_split_sizes[:-1])
+    for key in ray_batch:
+        if torch.is_tensor(ray_batch[key]):
+            ray_batch[key] = torch.split(ray_batch[key], rank_split_sizes)[rank].to(rank)
+
+    # split into chunks and render inside each process
+    ray_batch_split = OrderedDict()
+    for key in ray_batch:
+        if torch.is_tensor(ray_batch[key]):
+            ray_batch_split[key] = torch.split(ray_batch[key], chunk_size)
+
+    # forward and backward
+    ret_merge_chunk = [OrderedDict() for _ in range(models['cascade_level'])]
+    for s in range(len(ray_batch_split['ray_d'])):
+        ray_o = ray_batch_split['ray_o'][s]
+        ray_d = ray_batch_split['ray_d'][s]
+        min_depth = ray_batch_split['min_depth'][s]
+
+        dots_sh = list(ray_d.shape[:-1])
+        for m in range(models['cascade_level']):
+            if m == 0: continue
+            net = models['net_{}'.format(m)]
+            # sample depths
+            N_samples = models['cascade_samples'][m]
+            if m == 0:
+                # foreground depth
+                fg_far_depth = intersect_sphere(ray_o, ray_d)  # [...,]
+                fg_near_depth = min_depth  # [..., ]
+                step = (fg_far_depth - fg_near_depth) / (N_samples - 1)
+                fg_depth = torch.stack([fg_near_depth + i * step for i in range(N_samples)], dim=-1)  # [..., N_samples]
+
+                # background depth
+                bg_depth = torch.linspace(0., 1., N_samples).view(
+                    [1, ] * len(dots_sh) + [N_samples, ]).expand(dots_sh + [N_samples, ]).to(rank)
+
+                # delete unused memory
+                del fg_near_depth
+                del step
+                torch.cuda.empty_cache()
+            else:
+                # sample pdf and concat with earlier samples
+                fg_weights = ret['fg_weights'].clone().detach()
+                fg_depth_mid = .5 * (fg_depth[..., 1:] + fg_depth[..., :-1])  # [..., N_samples-1]
+                fg_weights = fg_weights[..., 1:-1]  # [..., N_samples-2]
+                fg_depth_samples = sample_pdf(bins=fg_depth_mid, weights=fg_weights,
+                                              N_samples=N_samples, det=True)  # [..., N_samples]
+                fg_depth, _ = torch.sort(torch.cat((fg_depth, fg_depth_samples), dim=-1))
+
+                # sample pdf and concat with earlier samples
+                bg_weights = ret['bg_weights'].clone().detach()
+                bg_depth_mid = .5 * (bg_depth[..., 1:] + bg_depth[..., :-1])
+                bg_weights = bg_weights[..., 1:-1]  # [..., N_samples-2]
+                bg_depth_samples = sample_pdf(bins=bg_depth_mid, weights=bg_weights,
+                                              N_samples=N_samples, det=True)  # [..., N_samples]
+                bg_depth, _ = torch.sort(torch.cat((bg_depth, bg_depth_samples), dim=-1))
+
+                # delete unused memory
+                del fg_weights
+                del fg_depth_mid
+                del fg_depth_samples
+                del bg_weights
+                del bg_depth_mid
+                del bg_depth_samples
+                torch.cuda.empty_cache()
+
+            with torch.no_grad():
+                ret = net(ray_o, ray_d, fg_far_depth, fg_depth, bg_depth, iteration,
+                          img_name=ray_sampler.img_path if img_name is None else img_name,
+                          rot_angle=rot_angle, save_memory4validation=True)
+
+            for key in ret:
+                if key not in ['fg_weights', 'bg_weights']:
+                    if torch.is_tensor(ret[key]):
+                        if key not in ret_merge_chunk[m]:
+                            ret_merge_chunk[m][key] = [ret[key].cpu(), ]
+                        else:
+                            ret_merge_chunk[m][key].append(ret[key].cpu())
+
+                        ret[key] = None
+
+            # clean unused memory
+            torch.cuda.empty_cache()
+
+    # merge results from different chunks
+    for m in range(len(ret_merge_chunk)):
+        for key in ret_merge_chunk[m]:
+            ret_merge_chunk[m][key] = torch.cat(ret_merge_chunk[m][key], dim=0)
+
+    # merge results from different processes
+    if rank == 0:
+        ret_merge_rank = [OrderedDict() for _ in range(len(ret_merge_chunk))]
+        for m in range(len(ret_merge_chunk)):
+            for key in ret_merge_chunk[m]:
+                # generate tensors to store results from other processes
+                sh = list(ret_merge_chunk[m][key].shape[1:])
+                ret_merge_rank[m][key] = [torch.zeros(*[size, ] + sh, dtype=torch.float32) for size in rank_split_sizes]
+                torch.distributed.gather(ret_merge_chunk[m][key], ret_merge_rank[m][key])
+                ret_merge_rank[m][key] = torch.cat(ret_merge_rank[m][key], dim=0)
+                if fixed > 0:
+                    ret_merge_rank[m][key] = ret_merge_rank[m][key][:-fixed]
+                ret_merge_rank[m][key] = ret_merge_rank[m][key].reshape(
+                    (ray_sampler.H, ray_sampler.W, -1)).squeeze()
+                # print(m, key, ret_merge_rank[m][key].shape)
+    else:  # send results to main process
+        for m in range(len(ret_merge_chunk)):
+            for key in ret_merge_chunk[m]:
+                torch.distributed.gather(ret_merge_chunk[m][key])
+
+    # only rank 0 program returns
+    if rank == 0:
+        return ret_merge_rank
+    else:
+        return None
 
 def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix=''):
     rgb_im = img_HWC2CHW(torch.from_numpy(gt_img))
@@ -357,16 +488,18 @@ def setup(rank, world_size, master_port):
     else:
         try:
             # os.environ['MASTER_PORT'] = '12420'
-            os.environ['MASTER_PORT'] = str(master_port)
+            os.environ['MASTER_PORT'] = str(master_port + rank * 100)
             logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on first try')
             torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
         except RuntimeError:
             try:
-                os.environ['MASTER_PORT'] = '12612'
+                # os.environ['MASTER_PORT'] = '12612'
+                os.environ['MASTER_PORT'] = str(master_port + rank * 43)
                 logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on second try')
                 torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
             except RuntimeError:
-                os.environ['MASTER_PORT'] = '15125'
+                # os.environ['MASTER_PORT'] = '15125'
+                os.environ['MASTER_PORT'] = str(master_port + rank * 77)
                 logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on third try')
                 torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
 
@@ -565,12 +698,13 @@ def ddp_train_nerf(rank, args, one_card=False):
             optim = models['optim_{}'.format(m)]
             net = models['net_{}'.format(m)]
 
+            ## debug: how to cube marching
             # li = [10000]
             # for threshold in li:
-            # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-1.1, -1.1, -1.1]).cuda(), torch.tensor([1.1, 1.1, 1.1]).cuda(), 64, 5000, global_step)
-            # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/st.obj')
+            # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-1.1, -1.1, -1.1]).cuda(), torch.tensor([1.1, 1.1, 1.1]).cuda(), 128, 5000, global_step)
+            # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/lwp.obj')
             # ForkedPdb().set_trace()
-
+            ## debug: how to cube marching
 
             # sample depths
             N_samples = models['cascade_samples'][m]
@@ -730,16 +864,41 @@ def ddp_train_nerf(rank, args, one_card=False):
             output_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step))
             os.makedirs(output_dir, exist_ok=True)
 
+
+
             # change chunk_size for validation on 1080Ti
             ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
-                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30: # two training processes on 3090
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20: # two training processes on 3090
                 logger.info('change chunk_size for validation part according to 12G gpu')
                 args.chunk_size = int(args.chunk_size / 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
+                args.chunk_size = int(args.chunk_size / 2)
 
+            ## debug: get SH and rot SH
+            # SH = models['net_1'].module.env_params['train/rgb/26-04_19_00_DSC_2474-jpg'].cpu().detach().numpy()
+            # imageio.imwrite('/home/youmingdeng/test.exr', SH)
+            # rotate_SH(SH, 0., -np.pi/3, 0.)
+            for i in range(36):
+                time0 = time.time()
+                angle = i * np.pi / 36
+                reli_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
+                                               args.chunk_size, global_step, angle)
+                reli_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step) + '_rot')
+                os.makedirs(reli_dir, exist_ok=True)
+                if rank == 0:
+                    for m in range(len(reli_data)):
+                        rgb_im = (reli_data[m]['rgb'])
+                        rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
+                        # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
+                        save_image(reli_dir + '/level_{}_rgb.png'.format(m), 255 * rgb_im.numpy())
+                dt = time.time() - time0
+                print(angle)
+                print(dt)
+            ForkedPdb().set_trace()
+            ## debug: get SH and rot SH
 
             log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
                                            args.chunk_size, global_step)
@@ -765,12 +924,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                                            global_step)
 
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
-                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
                 logger.info('change back!')
                 args.chunk_size = int(args.chunk_size * 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
+                args.chunk_size = int(args.chunk_size * 2)
             # change back chunk_size for validation on 1080Ti
             ###############################################
 
