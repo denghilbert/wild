@@ -481,27 +481,31 @@ def setup(rank, world_size, master_port):
     # initialize the process group
     slurmjob = os.environ.get('SLURM_JOB_ID', '')
     os.environ['MASTER_ADDR'] = 'localhost'
+
     if len(slurmjob) > 0:
         os.environ['MASTER_PORT'] = str(12000+int(slurmjob)%10000)
         logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on slurmjob ' + slurmjob)
         torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
     else:
-        try:
-            # os.environ['MASTER_PORT'] = '12420'
-            os.environ['MASTER_PORT'] = str(master_port + rank * 100)
-            logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on first try')
-            torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
-        except RuntimeError:
-            try:
-                # os.environ['MASTER_PORT'] = '12612'
-                os.environ['MASTER_PORT'] = str(master_port + rank * 43)
-                logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on second try')
-                torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
-            except RuntimeError:
-                # os.environ['MASTER_PORT'] = '15125'
-                os.environ['MASTER_PORT'] = str(master_port + rank * 77)
-                logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on third try')
-                torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+        os.environ['MASTER_PORT'] = str(master_port)
+        logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on first try')
+        torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+        # try:
+        #     # os.environ['MASTER_PORT'] = '12420'
+        #     os.environ['MASTER_PORT'] = str(master_port + rank * 100)
+        #     logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on first try')
+        #     torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+        # except RuntimeError:
+        #     try:
+        #         # os.environ['MASTER_PORT'] = '12612'
+        #         os.environ['MASTER_PORT'] = str(master_port + rank * 43)
+        #         logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on second try')
+        #         torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+        #     except RuntimeError:
+        #         # os.environ['MASTER_PORT'] = '15125'
+        #         os.environ['MASTER_PORT'] = str(master_port + rank * 77)
+        #         logger.info('using master port ' + os.environ['MASTER_PORT'] + ' based on third try')
+        #         torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
 
 
 def cleanup():
@@ -614,7 +618,6 @@ def ddp_train_nerf(rank, args, one_card=False):
     ###### set up logger
     logger = logging.getLogger(__package__)
     setup_logger()
-
     ###### decide chunk size according to gpu memory
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
