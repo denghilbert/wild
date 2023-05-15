@@ -221,7 +221,6 @@ class MLPNet(nn.Module):
 
         sigma = self.sigma_layers(base)
         sigma = torch.abs(sigma)
-
         # for mesh reconstruction
         if mesh_sigma == True:
             return sigma

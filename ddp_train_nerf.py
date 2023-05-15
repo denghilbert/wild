@@ -702,10 +702,8 @@ def ddp_train_nerf(rank, args, one_card=False):
             net = models['net_{}'.format(m)]
 
             ## debug: how to cube marching
-            # li = [10000]
-            # for threshold in li:
-            # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-1.1, -1.1, -1.1]).cuda(), torch.tensor([1.1, 1.1, 1.1]).cuda(), 128, 5000, global_step)
-            # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/lwp.obj')
+            # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-0.3, -0.3, -0.3]).cuda(), torch.tensor([0.3, 0.3, 0.3]).cuda(), 256, 200, global_step)
+            # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/lwp_my_256.obj')
             # ForkedPdb().set_trace()
             ## debug: how to cube marching
 
@@ -836,7 +834,6 @@ def ddp_train_nerf(rank, args, one_card=False):
         dt = time.time() - time0
         scalars_to_log['iter_time'] = dt
 
-        # ForkedPdb().set_trace()
         ### only main process should do the logging
         if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
             logstr = '{} step: {} '.format(args.expname, global_step)
@@ -867,8 +864,6 @@ def ddp_train_nerf(rank, args, one_card=False):
             output_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step))
             os.makedirs(output_dir, exist_ok=True)
 
-
-
             # change chunk_size for validation on 1080Ti
             ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
@@ -884,23 +879,23 @@ def ddp_train_nerf(rank, args, one_card=False):
             # SH = models['net_1'].module.env_params['train/rgb/26-04_19_00_DSC_2474-jpg'].cpu().detach().numpy()
             # imageio.imwrite('/home/youmingdeng/test.exr', SH)
             # rotate_SH(SH, 0., -np.pi/3, 0.)
-            for i in range(36):
-                time0 = time.time()
-                angle = i * np.pi / 36
-                reli_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
-                                               args.chunk_size, global_step, angle)
-                reli_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step) + '_rot')
-                os.makedirs(reli_dir, exist_ok=True)
-                if rank == 0:
-                    for m in range(len(reli_data)):
-                        rgb_im = (reli_data[m]['rgb'])
-                        rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
-                        # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
-                        save_image(reli_dir + '/level_{}_rgb.png'.format(m), 255 * rgb_im.numpy())
-                dt = time.time() - time0
-                print(angle)
-                print(dt)
-            ForkedPdb().set_trace()
+            # for i in range(72):
+            #     time0 = time.time()
+            #     angle = i * np.pi / 36
+            #     reli_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
+            #                                    args.chunk_size, global_step, angle)
+            #     reli_dir = os.path.join(args.basedir, args.expname, 'step' + str(global_step) + '_rot')
+            #     os.makedirs(reli_dir, exist_ok=True)
+            #     if rank == 0:
+            #         for m in range(len(reli_data)):
+            #             rgb_im = (reli_data[m]['rgb'])
+            #             rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
+            #             # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
+            #             save_image(reli_dir + '/level_1_rgb{}.png'.format(i), 255 * rgb_im.numpy())
+            #     dt = time.time() - time0
+            #     print(angle)
+            #     print(dt)
+            # ForkedPdb().set_trace()
             ## debug: get SH and rot SH
 
             log_data = render_single_image(rank, args.world_size, models, val_ray_samplers[idx],
@@ -1106,12 +1101,6 @@ def train_one_card():
     ddp_train_nerf(rank=args.local_rank, args=args, one_card=True)
 
 if __name__ == '__main__':
-    # u = np.ones((2, 2, 2), dtype=np.float32)
-    # u[u==1] = 100
-    # u[0][0][0] = 10
-    # vertices, triangles = mcubes.marching_cubes(u, 50)
-    # mcubes.export_obj(vertices, triangles, '/home/youmingdeng/tri.obj')
-    # ForkedPdb().set_trace()
     setup_logger()
     train()
     # train_one_card()

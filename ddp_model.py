@@ -343,16 +343,16 @@ class NerfNet(nn.Module):
     def extract_geometry(self, bound_min, bound_max, resolution, threshold, query_func):
         print('threshold: {}'.format(threshold))
         field = self.extract_fields(bound_min, bound_max, resolution, query_func)
-        import cv2
-        import matplotlib.pyplot as plt
-        for i in range(0, 63):
-            t1 = field[:, :, i]
-            t1[t1>1000] = 1000
-            cv2.imwrite("/home/youmingdeng/stcut/test{}.jpg".format(i), t1 * 255 / 1000)
-            plt.imshow(field[:, :, i], cmap='hot', interpolation='nearest')
-            plt.savefig("/home/youmingdeng/stcut/color{}.jpg".format(i))
-        ForkedPdb().set_trace()
-        iso_level = extract_iso_level(field, 32)
+        # import cv2
+        # import matplotlib.pyplot as plt
+        # for i in range(0, 63):
+        #     t1 = field[:, :, i]
+        #     t1[t1>1000] = 1000
+        #     cv2.imwrite("/home/youmingdeng/stcut/test{}.jpg".format(i), t1 * 255 / 1000)
+        #     plt.imshow(field[:, :, i], cmap='hot', interpolation='nearest')
+        #     plt.savefig("/home/youmingdeng/stcut/color{}.jpg".format(i))
+        # ForkedPdb().set_trace()
+        # iso_level = extract_iso_level(field, 32)
         vertices, triangles = mcubes.marching_cubes(field, threshold)
         b_max_np = bound_max.detach().cpu().numpy()
         b_min_np = bound_min.detach().cpu().numpy()
