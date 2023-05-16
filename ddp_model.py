@@ -506,7 +506,7 @@ class NerfNetWithAutoExpo(nn.Module):
         elif img_name in self.env_params:
             env = self.env_params[img_name]
         else:
-            # logger.warning('no envmap found for ' + str(img_name))
+            logger.warning('no envmap found for ' + str(img_name))
             env = self.defaultenv
             # env = torch.tensor([
             #     [ 0.7953949,  0.4405923,  0.5459412],
