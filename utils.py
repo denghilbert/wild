@@ -40,10 +40,26 @@ import matplotlib as mpl
 from matplotlib import cm
 import cv2
 
+import pdb, sys
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+
 def save_image(output_dir, image):
-
-    cv2.imwrite(output_dir, image)
-
+    if 'depth' in output_dir or 'lambda' in output_dir:
+        cv2.imwrite(output_dir, image)
+    else:
+        cv2.imwrite(output_dir, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     return True
 
 def get_vertical_colorbar(h, vmin, vmax, cmap_name='jet', label=None):

@@ -399,7 +399,7 @@ def relight_rotation_single_image(rank, world_size, models, ray_sampler, chunk_s
         return None
 
 def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix=''):
-    rgb_im = img_HWC2CHW(torch.from_numpy(gt_img))
+    # gt_img = img_HWC2CHW(torch.from_numpy(gt_img))
     # writer.add_image(prefix + 'rgb_gt', rgb_im, global_step)
     save_image(output_dir + prefix + 'rgb_gt.png', 255*gt_img)
 
@@ -867,13 +867,14 @@ def ddp_train_nerf(rank, args, one_card=False):
             # change chunk_size for validation on 1080Ti
             ############################################
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
-                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20: # two training processes on 3090
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30: # two training processes on 3090
+
                 logger.info('change chunk_size for validation part according to 12G gpu')
                 args.chunk_size = int(args.chunk_size / 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
-                args.chunk_size = int(args.chunk_size / 2)
+                args.chunk_size = int(args.chunk_size / 1.5)
 
             ## debug: get SH and rot SH
             # SH = models['net_1'].module.env_params['train/rgb/26-04_19_00_DSC_2474-jpg'].cpu().detach().numpy()
@@ -922,13 +923,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                                            global_step)
 
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
-                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
-                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
+                    torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
+                    # torch.cuda.get_device_properties(rank).total_memory / 1e9 < 30:
                 logger.info('change back!')
                 args.chunk_size = int(args.chunk_size * 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
-                args.chunk_size = int(args.chunk_size * 2)
+                args.chunk_size = int(args.chunk_size * 1.5)
             # change back chunk_size for validation on 1080Ti
             ###############################################
 
