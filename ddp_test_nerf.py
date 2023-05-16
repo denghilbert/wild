@@ -35,7 +35,7 @@ class ForkedPdb(pdb.Pdb):
 
 def ddp_test_nerf(rank, args):
     ###### set up multi-processing
-    setup(rank, args.world_size)
+    setup(rank, args.world_size, args.master_port)
     ###### set up logger
     logger = logging.getLogger(__package__)
     setup_logger()
@@ -44,15 +44,15 @@ def ddp_test_nerf(rank, args):
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 24:
         logger.info('setting batch size according to 48G gpu')
         args.N_rand = 512
-        args.chunk_size = 4096
+        args.chunk_size = 2048
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 14:
         logger.info('setting batch size according to 24G gpu')
-        args.N_rand = 1024
-        args.chunk_size = 8192
+        args.N_rand = 512
+        args.chunk_size = 2048
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 6:
         logger.info('setting batch size according to 12G gpu')
         args.N_rand = 512
-        args.chunk_size = 4096
+        args.chunk_size = 2048
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 3:
         logger.info('setting batch size according to 4G gpu')
         args.N_rand = 128
@@ -72,6 +72,7 @@ def ddp_test_nerf(rank, args):
         ###### load data and create ray samplers; each process should do this
         ray_samplers = load_data_split(args.datadir, args.scene, split, try_load_min_depth=args.load_min_depth,
                                        resolution_level=args.resolution_level)
+
         for idx in range(len(ray_samplers)):
             ### each process should do this; but only main process merges the results
             fname = '{:06d}.png'.format(idx)

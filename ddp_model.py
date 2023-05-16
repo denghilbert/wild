@@ -433,6 +433,7 @@ class NerfNetWithAutoExpo(nn.Module):
                 # [6.5793e-02, 4.3270e-02, -1.7002e-01],
                 # [-7.2674e-02, 4.5177e-02, 2.2858e-01]
             ], dtype=torch.float32))) for x in self.img_names]))  # todo: limit to max 1
+
         self.register_buffer('defaultenv', torch.tensor([
                 [2.9861e+00, 3.4646e+00, 3.9559e+00],
                 [1.0013e-01, -6.7589e-02, -3.1161e-01],
@@ -484,7 +485,6 @@ class NerfNetWithAutoExpo(nn.Module):
         if img_name is not None:
             img_name = remap_name(img_name)
         env = None
-
         if self.test_env is not None:
             if not os.path.isdir(self.test_env):
                 if 'test_env_val' not in dir(self):
@@ -499,7 +499,8 @@ class NerfNetWithAutoExpo(nn.Module):
                         env_data = np.loadtxt(env_fn)
                         env_name = os.path.splitext(os.path.basename(env_fn))[0]
                         self.test_env_val[env_name] = torch.tensor(env_data, dtype=torch.float32).to(ray_o.device)
-                env_name = img_name.split('/')[-1][:-4]
+                # env_name = img_name.split('/')[-1][:-4]
+                env_name = img_name.split('_IMG')[0]
                 env = self.test_env_val[env_name]
                 logger.warning('using env ' + env_name)
 
