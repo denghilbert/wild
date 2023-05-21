@@ -622,7 +622,7 @@ def ddp_train_nerf(rank, args, one_card=False):
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
         logger.info('setting batch size according to 24G gpu')
-        args.N_rand = 512
+        args.N_rand = 2048
         args.chunk_size = 4096
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9:
         logger.info('setting batch size according to 12G gpu')

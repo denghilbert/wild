@@ -283,6 +283,11 @@ class NerfNet(nn.Module):
             shadow_map = fg_shadow_map
             rgb_map = fg_rgb_map + bg_rgb_map * 0  # todo: enable bg later
 
+        # find bbox
+        max = torch.max((ray_o + fg_depth_map.unsqueeze(-1) * ray_d).T, 1)[0] + 0.02
+        min = torch.min((ray_o + fg_depth_map.unsqueeze(-1) * ray_d).T, 1)[0] - 0.02
+        bbox = torch.cat((min.unsqueeze(0), max.unsqueeze(0))).T
+
         if save_memory4validation == True:
             ret = OrderedDict([('rgb', rgb_map),  # loss
                                ('pure_rgb', pure_rgb_map),
@@ -300,6 +305,7 @@ class NerfNet(nn.Module):
                                ('bg_lambda', bg_lambda.detach()),
                                ('viewdir', viewdirs.detach()),
                                ('fg_normal_map_postintegral', fg_normal_map_postintegral.detach()),
+                               ('bbox', bbox.detach()),
                                ])
         else:
             ret = OrderedDict([('rgb', rgb_map),  # loss
@@ -318,7 +324,9 @@ class NerfNet(nn.Module):
                                ('bg_lambda', bg_lambda.detach()),
                                ('viewdir', viewdirs.detach()),
                                ('fg_normal_map_postintegral', fg_normal_map_postintegral),
+                               ('bbox', bbox.detach()),
                                ])
+
         return ret
 
 
