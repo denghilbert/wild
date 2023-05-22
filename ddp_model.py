@@ -305,7 +305,7 @@ class NerfNet(nn.Module):
                                ('bg_lambda', bg_lambda.detach()),
                                ('viewdir', viewdirs.detach()),
                                ('fg_normal_map_postintegral', fg_normal_map_postintegral.detach()),
-                               ('bbox', bbox.detach()),
+                               #('bbox', bbox.detach()),
                                ])
         else:
             ret = OrderedDict([('rgb', rgb_map),  # loss
@@ -324,7 +324,7 @@ class NerfNet(nn.Module):
                                ('bg_lambda', bg_lambda.detach()),
                                ('viewdir', viewdirs.detach()),
                                ('fg_normal_map_postintegral', fg_normal_map_postintegral),
-                               ('bbox', bbox.detach()),
+                               #('bbox', bbox.detach()),
                                ])
 
         return ret
