@@ -766,7 +766,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 rgb_pred = (ret['rgb'] - shift) / scale
                 rgb_loss = img2mse(rgb_pred, rgb_gt)
 
-                if args.normal_loss_weight != -1:
+                if args.normal_loss_weight != -1 and global_step >= 50000:
                     # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
                     # important !!!
                     fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
@@ -794,7 +794,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
 
-                if args.normal_loss_weight != -1:
+                if args.normal_loss_weight != -1 and global_step >= 50000:
                     # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
                     # important !!!
                     fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
