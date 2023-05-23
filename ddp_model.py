@@ -511,7 +511,6 @@ class NerfNetWithAutoExpo(nn.Module):
                 env_name = img_name.split('_IMG')[0]
                 env = self.test_env_val[env_name]
                 logger.warning('using env ' + env_name)
-
         elif img_name in self.env_params:
             env = self.env_params[img_name]
         else:
