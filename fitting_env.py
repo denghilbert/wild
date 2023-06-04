@@ -359,7 +359,7 @@ def main():
     # path to the lat-long hdr image
     # import pdb;
     # pdb.set_trace()
-    exr_img_paths = 'C:\\Users\\deng\\Desktop\\Merced\\envmap3.exr'
+    exr_img_paths = '/home/youmingdeng/9.15_inv/code/envmaps/envmap3.exr'
 
     # read and resize the hdr image
     exr_img = imageio.imread(exr_img_paths, format='EXR-FI')
@@ -418,7 +418,8 @@ def main():
     nm.requires_grad = False
     optimizer = torch.optim.Adam([lgtSGs,], lr=1e-2)
 
-    N_iter = 10000
+    N_iter = 50000
+    loss_last = 0
     for step in range(N_iter):
         optimizer.zero_grad()
         lighting_recon = sh_recon_torch(nm, lgtSGs)
@@ -439,11 +440,16 @@ def main():
         loss.backward()
         optimizer.step()
 
-        if step % 2000 == 0:
-            optimizer.defaults['lr'] = optimizer.defaults['lr'] / 10
-            print('lr change to {}'.format(optimizer.defaults['lr']))
+        # if loss_last < loss:
+        #     optimizer.defaults['lr'] = optimizer.defaults['lr'] / 10
+        #     print('lr change to {}'.format(optimizer.defaults['lr']))
+        # loss_last = loss.detach()
         if step % 50 == 0:
             print('step: {}, loss: {}, lr: {}'.format(step, loss.item(), optimizer.defaults['lr']))
+        if step % 100 == 0:
+            with open(os.path.join(env_txt_path, 'env_{}.txt'.format(step)), 'w') as f:
+                for line in lgtSGs.tolist():
+                    f.writelines('{} {} {}\n'.format(line[0], line[1], line[2]))
 
 
 if __name__ == '__main__':
