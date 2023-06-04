@@ -102,7 +102,6 @@ def ddp_test_nerf(rank, args):
                     gt_im = ray_samplers[idx].get_img()
                     psnr = mse2psnr(np.mean((gt_im - im) * (gt_im - im)))
                     logger.info('{}: psnr={}'.format(fname, psnr))
-
                 im = to8b(im)
                 imageio.imwrite(os.path.join(out_dir, fname), im)
 
