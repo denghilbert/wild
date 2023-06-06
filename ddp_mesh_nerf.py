@@ -51,15 +51,20 @@ def ddp_mesh_nerf(rank, args):
     # ax = np.linspace(-1, 1, num=256, endpoint=True, dtype=np.float16)/5
     # X, Y, Z = np.meshgrid(ax, ax+0.1, ax-0.3)
 
-    # ax = np.linspace(-0.3, 0.3, num=256, endpoint=True, dtype=np.float16)
-    # ay = np.linspace(-0.2, 0.2, num=256, endpoint=True, dtype=np.float16)
-    # az = np.linspace(-0.5, -0.2, num=256, endpoint=True, dtype=np.float16)
+    # ax = np.linspace(-0.4, 0.4, num=256, endpoint=True, dtype=np.float16)
+    # ay = np.linspace(-0.3, 0.3, num=256, endpoint=True, dtype=np.float16)
+    # az = np.linspace(-0.6, -0.3, num=256, endpoint=True, dtype=np.float16)
     # max, min
 
+    # lwp use depth filter
+    ax = np.linspace(-0.5520, 0.1663, num=256, endpoint=True, dtype=np.float16)
+    ay = np.linspace(-0.1259, 0.1416, num=256, endpoint=True, dtype=np.float16)
+    az = np.linspace(-0.5084, -0.0390, num=256, endpoint=True, dtype=np.float16)
 
-    ax = np.linspace(-0.7462,  0.3633, num=256, endpoint=True, dtype=np.float16)
-    ay = np.linspace(-0.7462,  0.3633, num=256, endpoint=True, dtype=np.float16)
-    az = np.linspace(-0.5189,  0.2486, num=256, endpoint=True, dtype=np.float16)
+
+    # ax = np.linspace(-0.5,  0.3633, num=256, endpoint=True, dtype=np.float16)
+    # ay = np.linspace(-0.5,  0.3633, num=256, endpoint=True, dtype=np.float16)
+    # az = np.linspace(-0.5,  0.2486, num=256, endpoint=True, dtype=np.float16)
     X, Y, Z = np.meshgrid(ax, ay, az)
     # ForkedPdb().set_trace()
     # flip yz
@@ -106,7 +111,7 @@ def ddp_mesh_nerf(rank, args):
     vtx, tri = mcubes.marching_cubes_color(allres.astype(np.float32), allcolor.astype(np.float32), 200)
     logger.info('Exporting mesh')
     # mcubes.export_mesh(vtx, tri, "mesh5.dae", "Mesh")
-    mcubes.export_obj(vtx, tri, "/home/youmingdeng/stjohann.obj")
+    mcubes.export_obj(vtx, tri, "/home/youmingdeng/lwp.obj")
 
 
 def mesh():

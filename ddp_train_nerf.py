@@ -398,7 +398,7 @@ def relight_rotation_single_image(rank, world_size, models, ray_sampler, chunk_s
     else:
         return None
 
-def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix=''):
+def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, prefix='', ray_o=None, ray_d=None):
     # gt_img = img_HWC2CHW(torch.from_numpy(gt_img))
     # writer.add_image(prefix + 'rgb_gt', rgb_im, global_step)
     save_image(output_dir + prefix + 'rgb_gt.png', 255*gt_img)
@@ -904,6 +904,15 @@ def ddp_train_nerf(rank, args, one_card=False):
 
             what_val_to_log += 1
             dt = time.time() - time0
+
+            if rank == 0:
+                ray_o = val_ray_samplers[idx].get_all()['ray_o']
+                ray_d = val_ray_samplers[idx].get_all()['ray_d']
+                bbox_max = torch.max((ray_o + log_data[1]['fg_depth'].reshape(-1, 1) * ray_d).T, 1)[0]
+                bbox_min = torch.min((ray_o + log_data[1]['fg_depth'].reshape(-1, 1) * ray_d).T, 1)[0]
+                bbox = torch.cat((bbox_min.unsqueeze(0), bbox_max.unsqueeze(0))).T
+                print(bbox)
+            ForkedPdb().set_trace()
 
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
