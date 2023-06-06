@@ -359,10 +359,12 @@ def main():
     # path to the lat-long hdr image
     # import pdb;
     # pdb.set_trace()
-    exr_img_paths = '/home/youmingdeng/9.15_inv/code/envmaps/envmap3.exr'
+    exr_img_paths = '/home/youmingdeng/youming8/data/lk2/final/ENV_MAP_CC/01-08_07_30/20210801_082411.jpg'
+    env_txt_path = '/home/youmingdeng/youming8/data/lk2/final/ENV_MAP_CC/01-08_07_30/'
 
     # read and resize the hdr image
-    exr_img = imageio.imread(exr_img_paths, format='EXR-FI')
+    # exr_img = imageio.imread(exr_img_paths, format='EXR-FI')
+    exr_img = imageio.imread(exr_img_paths, format='jpeg').astype('float32') / 255.
     exr_img = cv2.resize(exr_img, (360, 180), cv2.INTER_CUBIC)
     exr_h, exr_w = exr_img.shape[:2]
 
@@ -382,6 +384,12 @@ def main():
 
     # project the angular hdr map to the spherical harmonics
     img_sh = SH_proj(angularMap_values, angularMap_dirs, exr_h)
+
+    with open(os.path.join(env_txt_path, 'env.txt'), 'w') as f:
+        for line in img_sh:
+            f.writelines('{} {} {}\n'.format(line[0], line[1], line[2]))
+    import pdb
+    pdb.set_trace()
     lighting_recon = sh_recon(np.float32(render_sphere_nm(100, 1)), img_sh)
     lighting_validPix = lighting_recon[np.logical_not(np.isnan(lighting_recon))]
     lighting_recon = (lighting_recon - lighting_validPix.min()) / (lighting_validPix.max() - lighting_validPix.min())
@@ -416,7 +424,7 @@ def main():
     nm = torch.from_numpy(np.float32(render_sphere_nm(90, 1)))
     nm[nm!=nm] = 0
     nm.requires_grad = False
-    optimizer = torch.optim.Adam([lgtSGs,], lr=1e-2)
+    optimizer = torch.optim.Adam([lgtSGs,], lr=1e-3)
 
     N_iter = 50000
     loss_last = 0

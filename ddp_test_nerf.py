@@ -60,7 +60,8 @@ def ddp_test_nerf(rank, args):
 
     ###### create network and wrap in ddp; each process should do this
     start, models = create_nerf(rank, args)
-
+    # models['net_1'].module.env_params
+    # ForkedPdb().set_trace()
     render_splits = [x.strip() for x in args.render_splits.strip().split(',')]
     # start testing
     for split in render_splits:
