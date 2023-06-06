@@ -794,7 +794,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
 
-                if args.normal_loss_weight != -1 and global_step >= 50000:
+                if args.normal_loss_weight != -1 and global_step >= 20000:
                     # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
                     # important !!!
                     fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
@@ -912,7 +912,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 bbox_min = torch.min((ray_o + log_data[1]['fg_depth'].reshape(-1, 1) * ray_d).T, 1)[0]
                 bbox = torch.cat((bbox_min.unsqueeze(0), bbox_max.unsqueeze(0))).T
                 print(bbox)
-            ForkedPdb().set_trace()
+            #ForkedPdb().set_trace()
 
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
