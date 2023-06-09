@@ -108,7 +108,22 @@ def ddp_mesh_nerf(rank, args):
 
     logger.info('Doing MC')
     # vtx, tri = mcubes.marching_cubes(allres.astype(np.float32), 100)
+    # tri: gives ref to vtx, 3 refs from a triangle plane
+    # vtx: connection between two points
     vtx, tri = mcubes.marching_cubes_color(allres.astype(np.float32), allcolor.astype(np.float32), 200)
+    vtx1, tri1 = mcubes.marching_cubes(allres.astype(np.float32), 200)
+    x_min = -0.5520
+    x_max = 0.1663
+    y_min = -0.1259
+    y_max = 0.1416
+    z_min = -0.5084
+    z_max = -0.0390
+    res = 256 - 1
+    delta_x, delta_y, delta_z = (x_max - x_min) / res, (y_max - y_min) / res, (z_max - z_min) / res
+    delta = np.array([[delta_x, delta_y, delta_z, delta_x, delta_y, delta_z]]).repeat(vtx.shape[0], axis=0).reshape(-1, 6)
+    min_xyz = np.array([[x_min, y_min, z_min, x_min, y_min, z_min]]).repeat(vtx.shape[0], axis=0).reshape(-1, 6)
+    transform_xyz = min_xyz + delta * vtx
+    ForkedPdb().set_trace()
     logger.info('Exporting mesh')
     # mcubes.export_mesh(vtx, tri, "mesh5.dae", "Mesh")
     mcubes.export_obj(vtx, tri, "/home/youmingdeng/lwp.obj")

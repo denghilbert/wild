@@ -912,7 +912,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 bbox_min = torch.min((ray_o + log_data[1]['fg_depth'].reshape(-1, 1) * ray_d).T, 1)[0]
                 bbox = torch.cat((bbox_min.unsqueeze(0), bbox_max.unsqueeze(0))).T
                 print(bbox)
-            #ForkedPdb().set_trace()
+            # ForkedPdb().set_trace()
 
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))
@@ -930,6 +930,7 @@ def ddp_train_nerf(rank, args, one_card=False):
 
             log_data = render_single_image(rank, args.world_size, models, ray_samplers[idx], args.chunk_size,
                                            global_step)
+
 
             if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9 and \
                     torch.cuda.get_device_properties(rank).total_memory / 1e9 < 20:
