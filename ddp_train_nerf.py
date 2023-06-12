@@ -1076,7 +1076,33 @@ def config_parser():
     # youming options
     parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
     parser.add_argument("--master_port", type=int, default=12222, help='master_port of the program')
-    parser.add_argument("--start_val", default = False, action = "store_true", help = 'if reload, start validation at start+1 step')
+    parser.add_argument("--start_val", default = False, action="store_true", help = 'if reload, start validation at start+1 step')
+
+    # # grid nerf options
+    # parser.add_argument("--grid_feature_vector_size", type=int, default=256, help='grid feature vetor size')
+    # # grid embedding net
+    # parser.add_argument("--grid_net_d_in", type=int, default=3)
+    # parser.add_argument("--grid_net_d_out", type=int, default=1)
+    # parser.add_argument("--grid_net_dims", type=int, nargs='+', default=[256, 256])
+    # parser.add_argument("--grid_net_geometric_init", default=True, action="store_true")
+    # parser.add_argument("--grid_net_bias", type=float, default=0.6)
+    # parser.add_argument("--grid_net_skip_in", type=int, nargs='+', default=[4])
+    # parser.add_argument("--grid_net_weight_norm", default=True, action="store_true")
+    # parser.add_argument("--grid_net_multires", type=int, default=6)
+    # parser.add_argument("--grid_net_inside_outside", default=True, action="store_true")
+    # parser.add_argument("--grid_net_use_grid_feature", default=True, action="store_true")
+    # parser.add_argument("--grid_net_divide_factor", type=float, default=1.0)
+    # # rendering net
+    # parser.add_argument("--render_mode", type=str, default='idr')
+    # parser.add_argument("--render_d_in", type=int, default=9)
+    # parser.add_argument("--render_d_out", type=int, default=3)
+    # parser.add_argument("--render_dims", type=int, nargs='+', default=[256, 256])
+    # parser.add_argument("--render_weight_norm", default=True, action="store_true")
+    # parser.add_argument("--render_multires_view", type=int, default=4)
+    # parser.add_argument("--render_per_image_code", default=True, action="store_true")
+    # # density net
+    # parser.add_argument("--grid_beta", type=float, default=0.1)
+    # parser.add_argument("--grid_beta_min", type=float, default=0.0001)
 
     return parser
 
