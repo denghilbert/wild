@@ -26,375 +26,403 @@ class ForkedPdb(pdb.Pdb):
             pdb.Pdb.interaction(self, *args, **kwargs)
         finally:
             sys.stdin = _stdin
-######################################################################################
-# wrapper to simplify the use of nerfnet
-######################################################################################
-def depth2pts_outside(ray_o, ray_d, depth):
-    '''
-    ray_o, ray_d: [..., 3]
-    depth: [...]; inverse of distance to sphere origin
-    '''
-    # note: d1 becomes negative if this mid point is behind camera
-    d1 = -torch.sum(ray_d * ray_o, dim=-1) / torch.sum(ray_d * ray_d, dim=-1)
-    p_mid = ray_o + d1.unsqueeze(-1) * ray_d
-    p_mid_norm = torch.norm(p_mid, dim=-1)
-    ray_d_cos = 1. / torch.norm(ray_d, dim=-1)
-    d2 = torch.sqrt(1. - p_mid_norm * p_mid_norm) * ray_d_cos
-    p_sphere = ray_o + (d1 + d2).unsqueeze(-1) * ray_d
 
-    rot_axis = torch.cross(ray_o, p_sphere, dim=-1)
-    rot_axis = rot_axis / torch.norm(rot_axis, dim=-1, keepdim=True)
-    phi = torch.asin(p_mid_norm)
-    theta = torch.asin(p_mid_norm * depth)  # depth is inside [0, 1]
-    rot_angle = (phi - theta).unsqueeze(-1)  # [..., 1]
 
-    # now rotate p_sphere
-    # Rodrigues formula: https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
-    p_sphere_new = p_sphere * torch.cos(rot_angle) + \
-                   torch.cross(rot_axis, p_sphere, dim=-1) * torch.sin(rot_angle) + \
-                   rot_axis * torch.sum(rot_axis * p_sphere, dim=-1, keepdim=True) * (1. - torch.cos(rot_angle))
-    p_sphere_new = p_sphere_new / torch.norm(p_sphere_new, dim=-1, keepdim=True)
-    pts = torch.cat((p_sphere_new, depth.unsqueeze(-1)), dim=-1)
+from hashencoder.hashgrid import _hash_encode, HashEncoder
+from density import LaplaceDensity
+from embedder import *
 
-    # now calculate conventional depth
-    depth_real = 1. / (depth + TINY_NUMBER) * torch.cos(theta) * ray_d_cos + d1
-    return pts, depth_real
+class ImplicitNetworkGrid(nn.Module):
+    def __init__(
+            self,
+            feature_vector_size,
+            d_in,
+            d_out,
+            dims,
+            geometric_init=True,
+            bias=1.0,
+            skip_in=(),
+            weight_norm=True,
+            multires=0,
+            sphere_scale=1.0,
+            inside_outside=False,
+            base_size=16,
+            end_size=2048,
+            logmap=19,
+            num_levels=16,
+            level_dim=2,
+            divide_factor=1.5,  # used to normalize the points range for multi-res grid
+            use_grid_feature=True
+    ):
+        super().__init__()
+
+        self.sphere_scale = sphere_scale
+        dims = [d_in] + dims + [d_out + feature_vector_size]
+        self.embed_fn = None
+        self.divide_factor = divide_factor
+        self.grid_feature_dim = num_levels * level_dim
+        self.use_grid_feature = use_grid_feature
+        dims[0] += self.grid_feature_dim
+
+        print(f"using hash encoder with {num_levels} levels, each level with feature dim {level_dim}")
+        print(f"resolution:{base_size} -> {end_size} with hash map size {logmap}")
+        self.encoding = HashEncoder(input_dim=3, num_levels=num_levels, level_dim=level_dim,
+                                    per_level_scale=2, base_resolution=base_size,
+                                    log2_hashmap_size=logmap, desired_resolution=end_size)
+
+        if multires > 0:
+            embed_fn, input_ch = get_embedder(multires, input_dims=d_in)
+            self.embed_fn = embed_fn
+            dims[0] += input_ch - 3
+        print("network architecture")
+        print(dims)
+
+        self.num_layers = len(dims)
+        self.skip_in = skip_in
+
+        for l in range(0, self.num_layers - 1):
+            if l + 1 in self.skip_in:
+                out_dim = dims[l + 1] - dims[0]
+            else:
+                out_dim = dims[l + 1]
+
+            lin = nn.Linear(dims[l], out_dim)
+
+            if geometric_init:
+                if l == self.num_layers - 2:
+                    if not inside_outside:
+                        torch.nn.init.normal_(lin.weight, mean=np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001)
+                        torch.nn.init.constant_(lin.bias, -bias)
+                    else:
+                        torch.nn.init.normal_(lin.weight, mean=-np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001)
+                        torch.nn.init.constant_(lin.bias, bias)
+
+                elif multires > 0 and l == 0:
+                    torch.nn.init.constant_(lin.bias, 0.0)
+                    torch.nn.init.constant_(lin.weight[:, 3:], 0.0)
+                    torch.nn.init.normal_(lin.weight[:, :3], 0.0, np.sqrt(2) / np.sqrt(out_dim))
+                elif multires > 0 and l in self.skip_in:
+                    torch.nn.init.constant_(lin.bias, 0.0)
+                    torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
+                    torch.nn.init.constant_(lin.weight[:, -(dims[0] - 3):], 0.0)
+                else:
+                    torch.nn.init.constant_(lin.bias, 0.0)
+                    torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
+
+            if weight_norm:
+                lin = nn.utils.weight_norm(lin)
+
+            setattr(self, "lin" + str(l), lin)
+
+        self.softplus = nn.Softplus(beta=100)
+        self.cache_sdf = None
+
+    def forward(self, input1):
+        import pdb
+        pdb.set_trace()
+        if self.use_grid_feature:
+            # normalize point range as encoding assume points are in [-1, 1]
+            feature = self.encoding(input1 / self.divide_factor)
+        else:
+            feature = torch.zeros_like(input1[:, :1].repeat(1, self.grid_feature_dim))
+        import pdb
+        pdb.set_trace()
+        if self.embed_fn is not None:
+            embed = self.embed_fn(input1)
+            input1 = torch.cat((embed, feature), dim=-1)
+        else:
+            input1 = torch.cat((input1, feature), dim=-1)
+
+        x = input1
+
+        for l in range(0, self.num_layers - 1):
+            lin = getattr(self, "lin" + str(l))
+
+            if l in self.skip_in:
+                x = torch.cat([x, input1], 1) / np.sqrt(2)
+
+            x = lin(x)
+
+            if l < self.num_layers - 2:
+                x = self.softplus(x)
+
+        return x
+
+    def gradient(self, x):
+        x.requires_grad_(True)
+        y = self.forward(x)[:, :1]
+        d_output = torch.ones_like(y, requires_grad=False, device=y.device)
+        gradients = torch.autograd.grad(
+            outputs=y,
+            inputs=x,
+            grad_outputs=d_output,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True)[0]
+        return gradients
+
+    def get_outputs(self, x):
+        x.requires_grad_(True)
+        output = self.forward(x)
+        sdf = output[:, :1]
+
+        feature_vectors = output[:, 1:]
+        d_output = torch.ones_like(sdf, requires_grad=False, device=sdf.device)
+        gradients = torch.autograd.grad(
+            outputs=sdf,
+            inputs=x,
+            grad_outputs=d_output,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True)[0]
+
+        return sdf, feature_vectors, gradients
+
+    def get_sdf_vals(self, x):
+        sdf = self.forward(x)[:, :1]
+        return sdf
+
+    def mlp_parameters(self):
+        parameters = []
+        for l in range(0, self.num_layers - 1):
+            lin = getattr(self, "lin" + str(l))
+            parameters += list(lin.parameters())
+        return parameters
+
+    def grid_parameters(self):
+        print("grid parameters", len(list(self.encoding.parameters())))
+        for p in self.encoding.parameters():
+            print(p.shape)
+        return self.encoding.parameters()
+
+
+class RenderingNetwork(nn.Module):
+    def __init__(
+            self,
+            feature_vector_size,
+            mode,
+            d_in,
+            d_out,
+            dims,
+            weight_norm=True,
+            multires_view=0,
+            per_image_code=False
+    ):
+        super().__init__()
+
+        self.mode = mode
+        dims = [d_in + feature_vector_size] + dims + [d_out]
+
+        self.embedview_fn = None
+        if multires_view > 0:
+            embedview_fn, input_ch = get_embedder(multires_view)
+            self.embedview_fn = embedview_fn
+            dims[0] += (input_ch - 3)
+
+        self.per_image_code = per_image_code
+        if self.per_image_code:
+            # nerf in the wild parameter
+            # parameters
+            # maximum 1024 images
+            self.embeddings = nn.Parameter(torch.empty(1024, 32))
+            std = 1e-4
+            self.embeddings.data.uniform_(-std, std)
+            dims[0] += 32
+
+        print("rendering network architecture:")
+        print(dims)
+
+        self.num_layers = len(dims)
+
+        for l in range(0, self.num_layers - 1):
+            out_dim = dims[l + 1]
+            lin = nn.Linear(dims[l], out_dim)
+
+            if weight_norm:
+                lin = nn.utils.weight_norm(lin)
+
+            setattr(self, "lin" + str(l), lin)
+
+        self.relu = nn.ReLU()
+        self.sigmoid = torch.nn.Sigmoid()
+
+    def forward(self, points, normals, view_dirs, feature_vectors, indices):
+        if self.embedview_fn is not None:
+            view_dirs = self.embedview_fn(view_dirs)
+
+        if self.mode == 'idr':
+            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
+        elif self.mode == 'nerf':
+            rendering_input = torch.cat([view_dirs, feature_vectors], dim=-1)
+        else:
+            raise NotImplementedError
+
+        if self.per_image_code:
+            image_code = self.embeddings[indices].expand(rendering_input.shape[0], -1)
+            rendering_input = torch.cat([rendering_input, image_code], dim=-1)
+
+        x = rendering_input
+
+        for l in range(0, self.num_layers - 1):
+            lin = getattr(self, "lin" + str(l))
+
+            x = lin(x)
+
+            if l < self.num_layers - 2:
+                x = self.relu(x)
+
+        x = self.sigmoid(x)
+        return x
 
 
 class GridNerfNet(nn.Module):
-    def __init__(self, args):
+    def __init__(self, conf):
         super().__init__()
-        # foreground
-        self.fg_embedder_position = Embedder(input_dim=3,
-                                             max_freq_log2=args.max_freq_log2 - 1,
-                                             N_freqs=args.max_freq_log2,
-                                             N_anneal=args.N_anneal,
-                                             N_anneal_min_freq=args.N_anneal_min_freq,
-                                             use_annealing=args.use_annealing)
-        self.fg_embedder_viewdir = Embedder(input_dim=3,
-                                            max_freq_log2=args.max_freq_log2_viewdirs - 1,
-                                            N_freqs=args.max_freq_log2_viewdirs,
-                                            N_anneal=args.N_anneal,
-                                            N_anneal_min_freq=args.N_anneal_min_freq_viewdirs,
-                                            use_annealing=args.use_annealing)
-        self.fg_net = MLPNet(D=args.netdepth, W=args.netwidth,
-                             input_ch=self.fg_embedder_position.out_dim,
-                             input_ch_viewdirs=self.fg_embedder_viewdir.out_dim,
-                             use_viewdirs=args.use_viewdirs,
-                             use_shadow=True,
-                             act=args.activation)
-        # background; bg_pt is (x, y, z, 1/r)
-        self.bg_embedder_position = Embedder(input_dim=4,
-                                             max_freq_log2=args.max_freq_log2 - 1,
-                                             N_freqs=args.max_freq_log2,
-                                             N_anneal=args.N_anneal,
-                                             N_anneal_min_freq=args.N_anneal_min_freq,
-                                             use_annealing=args.use_annealing)
-        self.bg_embedder_viewdir = Embedder(input_dim=3,
-                                            max_freq_log2=args.max_freq_log2_viewdirs - 1,
-                                            N_freqs=args.max_freq_log2_viewdirs,
-                                            N_anneal=args.N_anneal,
-                                            N_anneal_min_freq=args.N_anneal_min_freq_viewdirs,
-                                            use_annealing=args.use_annealing)
-        self.bg_net = MLPNet(D=args.netdepth, W=args.netwidth,
-                             input_ch=self.bg_embedder_position.out_dim,
-                             input_ch_viewdirs=self.bg_embedder_viewdir.out_dim,
-                             use_viewdirs=args.use_viewdirs,
-                             use_shadow=False,
-                             act=args.activation)
+        self.feature_vector_size = 256 #conf.get_int('feature_vector_size')
+        self.scene_bounding_sphere = 1. #conf.get_float('scene_bounding_sphere', default=1.0)
+        self.white_bkgd = False #conf.get_bool('white_bkgd', default=False)
+        self.bg_color = torch.tensor([1.0, 1.0, 1.0]).float().cuda()#torch.tensor(conf.get_list("bg_color", default=[1.0, 1.0, 1.0])).float().cuda()
 
-        self.with_bg = args.with_bg
-
-        self.use_shadow_jitter = args.use_shadow_jitter
-        self.use_shadows = args.use_shadows
-
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, save_memory4validation=False):
-        '''
-        :param ray_o, ray_d: [..., 3]
-        :param fg_z_max: [...,]
-        :param fg_z_vals, bg_z_vals: [..., N_samples]
-        :return
-        '''
-        # print(ray_o.shape, ray_d.shape, fg_z_max.shape, fg_z_vals.shape, bg_z_vals.shape)
-        ray_d_norm = torch.norm(ray_d, dim=-1, keepdim=True)  # [..., 1]
-        viewdirs = ray_d / ray_d_norm  # [..., 3]
-        dots_sh = list(ray_d.shape[:-1])
-
-        ######### render foreground
-        N_samples = fg_z_vals.shape[-1]
-        fg_ray_o = ray_o.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-        fg_ray_d = ray_d.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-        fg_viewdirs = viewdirs.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-        env_gray = env[..., 0]*0.2126 + env[..., 1]*0.7152 + env[..., 2]*0.0722
-        fg_sph = env_gray.view(9).unsqueeze(0).unsqueeze(0).expand(dots_sh + [N_samples, 9])
-
-        if self.use_shadow_jitter:
-            fg_sph = fg_sph + torch.randn_like(fg_sph)*0.01
-
-        # fg_viewdirs = fg_viewdirs * 0  # todo: disable viewdirs, because we need albedo
-        with torch.enable_grad():
-            fg_pts = fg_ray_o + fg_z_vals.unsqueeze(-1) * fg_ray_d
-            fg_pts.requires_grad_(True)
-
-            input = torch.cat((self.fg_embedder_position(fg_pts, iteration), fg_sph, self.fg_embedder_viewdir(fg_viewdirs, iteration)), dim=-1)
-            fg_raw = self.fg_net(input)
-            # ForkedPdb().set_trace()
-
-            # sigmamasked = fg_raw['sigma']*(fg_raw['sigma'] < 4.0)
-            # fg_raw['sigma'] = fg_raw['sigma'] - sigmamasked
-            fg_normal_map = torch.autograd.grad(
-                outputs=fg_raw['sigma'],
-                inputs=fg_pts,
-                grad_outputs=torch.ones_like(fg_raw['sigma'], requires_grad=False),
-                retain_graph=True,
-                create_graph=True)[0]
-
-            fg_normal_map_postintegral = fg_normal_map.clone()
-            fg_normal_map_postintegral = F.normalize(fg_normal_map_postintegral, p=2, dim=-1)
-
-        # alpha blending
-        fg_dists = fg_z_vals[..., 1:] - fg_z_vals[..., :-1]
-        # account for view directions
-        fg_dists = ray_d_norm * torch.cat((fg_dists, fg_z_max.unsqueeze(-1) - fg_z_vals[..., -1:]),
-                                          dim=-1)  # [..., N_samples]
-        fg_alpha = 1. - torch.exp(-fg_raw['sigma'] * fg_dists)  # [..., N_samples]
-        T = torch.cumprod(1. - fg_alpha + TINY_NUMBER, dim=-1)  # [..., N_samples]
-        bg_lambda = T[..., -1]
-        T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
-        fg_weights = fg_alpha * T  # [..., N_samples]
-        fg_albedo_map = torch.sum(fg_weights.unsqueeze(-1) * fg_raw['rgb'], dim=-2)  # [..., 3]
-        fg_shadow_map = torch.sum(fg_weights.unsqueeze(-1) * fg_raw['shadow'], dim=-2)  # [..., 3]
+        grid_net_d_in = 3
+        grid_net_d_out = 1
+        grid_net_dims = [256, 256]
+        grid_net_geometric_init = True
+        grid_net_bias = 0.6
+        grid_net_skip_in = [4]
+        grid_net_weight_norm = True
+        grid_net_multires = 6
+        grid_net_inside_outside = True
+        grid_net_use_grid_feature = True
+        grid_net_divide_factor = 1.0
+        self.implicit_network = ImplicitNetworkGrid(
+            self.feature_vector_size, grid_net_d_in, grid_net_d_out, grid_net_dims,
+            grid_net_geometric_init, grid_net_bias, grid_net_skip_in, grid_net_weight_norm,
+            grid_net_multires, grid_net_inside_outside, use_grid_feature=grid_net_use_grid_feature,
+            divide_factor=grid_net_divide_factor
+        )
+        render_mode = 'idr'
+        render_d_in = 9
+        render_d_out = 3
+        render_dims = [256, 256]
+        render_weight_norm = True
+        render_multires_view = 4
+        render_per_image_code = True
+        self.rendering_network = RenderingNetwork(
+            self.feature_vector_size, render_mode, render_d_in, render_d_out, render_dims,
+            render_weight_norm, render_multires_view, render_per_image_code
+        )
+        grid_beta = {'beta': 0.1}
+        grid_beta_min = 0.0001
+        self.density = LaplaceDensity(grid_beta, grid_beta_min)
+        import pdb
+        pdb.set_trace()
 
 
-        if not self.use_shadows:
-            fg_shadow_map = fg_shadow_map * 0 + 1
+    def forward(self, input, indices):
+        # Parse model input
+        intrinsics = input["intrinsics"]
+        uv = input["uv"]
+        pose = input["pose"]
 
-        '''
-        # this will be returned for ekional loss calculation
-        weight = fg_weights.clone()
-        weight_move_one_right_step = torch.zeros(fg_weights.shape).cuda()
-        weight_move_one_right_step[:, 0:-1] = weight[:, 1:]
-        # faster change of density means closer to the surface (larger weight)
-        # to avoid values smaller than 0 we use torch.abs
-        diff_weight = torch.abs(weight - weight_move_one_right_step)
-        diff_weight = F.normalize(diff_weight, p=1, dim=-1)
-        mean_normal_grad = (fg_normal_map * diff_weight.unsqueeze(-1)).mean(-2)
-        mean_normal_grad = F.normalize(mean_normal_grad, p=2, dim=-1)
-        '''
+        ray_dirs, cam_loc = rend_util.get_camera_params(uv, pose, intrinsics)
 
-        fg_depth_map = torch.sum(fg_weights * fg_z_vals, dim=-1)  # [...,]
-        # print(fg_pts.shape, fg_depth_map.shape, fg_raw['sigma'].shape)
-        fg_normal_map = (fg_normal_map * fg_weights.unsqueeze(-1)).mean(-2)
-        # fg_normal_map = fg_normal_map.mean(-2)
-        fg_normal_map = F.normalize(fg_normal_map, p=2, dim=-1)
-        # print(fg_normal_map.shape)
+        # we should use unnormalized ray direction for depth
+        ray_dirs_tmp, _ = rend_util.get_camera_params(uv, torch.eye(4).to(pose.device)[None], intrinsics)
+        depth_scale = ray_dirs_tmp[0, :, 2:]
 
+        batch_size, num_pixels, _ = ray_dirs.shape
 
-        # c1 = 0.429043
-        # c2 = 0.511664
-        # c3 = 0.743125
-        # c4 = 0.886227
-        # c5 = 0.247708
-        # c = env.unsqueeze(1)
-        # n = fg_normal_map
-        # def rotate_xz(v, rot_angle):
-        #     mat = v.new_zeros((3, 3))
-        #     cos = np.cos(rot_angle)
-        #     sin = np.sin(rot_angle)
-        #     mat[0,0] = cos
-        #     mat[0,2] = -sin
-        #     mat[2,0] = sin
-        #     mat[2,2] = cos
-        #     return v @ mat.T
-        # cos = np.cos(rot_angle)
-        # sin = np.sin(rot_angle)
+        cam_loc = cam_loc.unsqueeze(1).repeat(1, num_pixels, 1).reshape(-1, 3)
+        ray_dirs = ray_dirs.reshape(-1, 3)
 
-        # n = rotate_xz(n, rot_angle)
-        # irradiance = (
-        #     c4 * c[0] - c5 * c[6] +
-        #     n[..., 0, None] * (2 * c2 * sin * c[2] + 2 * c2 * cos * c[3]) +
-        #     n[..., 1, None] * (2 * c2 * c[1]) +
-        #     n[..., 2, None] * (2 * c2 * cos * c[2] - 2 * c2 * sin * c[3]) +
-        #     (n[..., 0, None] ** 2) * (c3*sin*sin*c[6]+2*c1*sin*cos*c[7]+c1*cos*cos*c[8]) +
-        #     (n[..., 1, None] ** 2) * (-c1 * c[8]) +
-        #     (n[..., 2, None] ** 2) * (c3*cos*cos*c[6]-2*c1*sin*cos*c[7]+c1*sin*sin*c[8]) +
-        #     n[..., 0, None] * n[..., 1, None] * (2*c1*cos*c[4]+2*c1*sin*c[5]) +
-        #     n[..., 0, None] * n[..., 2, None] * (2*c3*sin*cos*c[6]+2*c1*(cos*cos-sin*sin)*c[7]-2*c1*sin*cos*c[8]) +
-        #     n[..., 1, None] * n[..., 2, None] * (-2*c1*sin*c[4]+2*c1*cos*c[5])
-        # )
+        z_vals, z_samples_eik = self.ray_sampler.get_z_vals(ray_dirs, cam_loc, self)
+        N_samples = z_vals.shape[1]
 
-        # irradiance = (
-        #         c1 * c[8] * (n[..., 0, None] ** 2 - n[..., 1, None] ** 2) +
-        #         c3 * c[6] * (n[..., 2, None] ** 2) +
-        #         c4 * c[0] -
-        #         c5 * c[6] +
-        #         2 * c1 * c[4] * n[..., 0, None] * n[..., 1, None] +
-        #         2 * c1 * c[7] * n[..., 0, None] * n[..., 2, None] +
-        #         2 * c1 * c[5] * n[..., 1, None] * n[..., 2, None] +
-        #         2 * c2 * c[3] * n[..., 0, None] +
-        #         2 * c2 * c[1] * n[..., 1, None] +
-        #         2 * c2 * c[2] * n[..., 2, None]
-        # )
-        irradiance = illuminate_vec(fg_normal_map, env)
-        irradiance = torch.relu(irradiance)  # can't be < 0
-        irradiance = irradiance ** (1 / 2.2)  # linear to srgb
-        fg_pure_rgb_map = irradiance * fg_albedo_map
-        fg_rgb_map = fg_pure_rgb_map * fg_shadow_map
+        points = cam_loc.unsqueeze(1) + z_vals.unsqueeze(2) * ray_dirs.unsqueeze(1)
+        points_flat = points.reshape(-1, 3)
 
-        # render background
-        if self.with_bg:
-            N_samples = bg_z_vals.shape[-1]
-            bg_ray_o = ray_o.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-            bg_ray_d = ray_d.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-            bg_viewdirs = viewdirs.unsqueeze(-2).expand(dots_sh + [N_samples, 3])
-            bg_pts, _ = depth2pts_outside(bg_ray_o, bg_ray_d, bg_z_vals)  # [..., N_samples, 4]
-            input = torch.cat((self.bg_embedder_position(bg_pts, iteration),
-                               self.bg_embedder_viewdir(bg_viewdirs, iteration)), dim=-1)
-            # near_depth: physical far; far_depth: physical near
-            input = torch.flip(input, dims=[-2, ])
-            bg_z_vals = torch.flip(bg_z_vals, dims=[-1, ])  # 1--->0
-            bg_dists = bg_z_vals[..., :-1] - bg_z_vals[..., 1:]
-            bg_dists = torch.cat((bg_dists, HUGE_NUMBER * torch.ones_like(bg_dists[..., 0:1])), dim=-1)  # [..., N_samples]
-            bg_raw = self.bg_net(input)
-            bg_alpha = 1. - torch.exp(-bg_raw['sigma'] * bg_dists)  # [..., N_samples]
-            # Eq. (3): T
-            # maths show weights, and summation of weights along a ray, are always inside [0, 1]
-            T = torch.cumprod(1. - bg_alpha + TINY_NUMBER, dim=-1)[..., :-1]  # [..., N_samples-1]
-            T = torch.cat((torch.ones_like(T[..., 0:1]), T), dim=-1)  # [..., N_samples]
-            bg_weights = bg_alpha * T  # [..., N_samples]
+        dirs = ray_dirs.unsqueeze(1).repeat(1, N_samples, 1)
+        dirs_flat = dirs.reshape(-1, 3)
 
-            bg_rgb_map = torch.sum(bg_weights.unsqueeze(-1) * bg_raw['rgb'], dim=-2)  # [..., 3]
-            bg_depth_map = torch.sum(bg_weights * bg_z_vals, dim=-1)  # [...,]
+        sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
 
-            # composite foreground and background
-            bg_rgb_map = bg_lambda.unsqueeze(-1) * bg_rgb_map
-            bg_depth_map = bg_lambda * bg_depth_map
-        else:
-            bg_rgb_map = fg_rgb_map*0
-            bg_depth_map = fg_depth_map*0
-            bg_weights = fg_weights*0
+        rgb_flat = self.rendering_network(points_flat, gradients, dirs_flat, feature_vectors, indices)
+        rgb = rgb_flat.reshape(-1, N_samples, 3)
 
-        if self.with_bg:
-            pure_rgb_map = fg_pure_rgb_map + bg_rgb_map
-            shadow_map = fg_shadow_map
-            rgb_map = fg_rgb_map + bg_rgb_map  # todo: better compose fg
-        else:
-            pure_rgb_map = fg_pure_rgb_map + bg_rgb_map * 0
-            shadow_map = fg_shadow_map
-            rgb_map = fg_rgb_map + bg_rgb_map * 0  # todo: enable bg later
+        weights = self.volume_rendering(z_vals, sdf)
 
-        # find bbox
-        max = torch.max((ray_o + fg_depth_map.unsqueeze(-1) * ray_d).T, 1)[0] + 0.02
-        min = torch.min((ray_o + fg_depth_map.unsqueeze(-1) * ray_d).T, 1)[0] - 0.02
-        bbox = torch.cat((min.unsqueeze(0), max.unsqueeze(0))).T
+        rgb_values = torch.sum(weights.unsqueeze(-1) * rgb, 1)
 
-        if save_memory4validation == True:
-            ret = OrderedDict([('rgb', rgb_map),  # loss
-                               ('pure_rgb', pure_rgb_map),
-                               ('shadow', shadow_map),
-                               ('fg_weights', fg_weights),  # importance sampling
-                               ('bg_weights', bg_weights),  # importance sampling
-                               ('fg_rgb', fg_rgb_map),  # below are for logging
-                               ('fg_albedo', fg_albedo_map.detach()),
-                               ('fg_shadow', fg_shadow_map.detach()),
-                               ('fg_depth', fg_depth_map.detach()),
-                               ('fg_normal', fg_normal_map.detach()),
-                               ('irradiance', irradiance.detach()),
-                               ('bg_rgb', bg_rgb_map.detach()),
-                               ('bg_depth', bg_depth_map.detach()),
-                               ('bg_lambda', bg_lambda.detach()),
-                               ('viewdir', viewdirs.detach()),
-                               ('fg_normal_map_postintegral', fg_normal_map_postintegral.detach()),
-                               #('bbox', bbox.detach()),
-                               ])
-        else:
-            ret = OrderedDict([('rgb', rgb_map),  # loss
-                               ('pure_rgb', pure_rgb_map),
-                               ('shadow', shadow_map),
-                               ('fg_weights', fg_weights),  # importance sampling
-                               ('bg_weights', bg_weights),  # importance sampling
-                               ('fg_rgb', fg_rgb_map),  # below are for logging
-                               ('fg_albedo', fg_albedo_map.detach()),
-                               ('fg_shadow', fg_shadow_map.detach()),
-                               ('fg_depth', fg_depth_map.detach()),
-                               ('fg_normal', fg_normal_map),
-                               ('irradiance', irradiance.detach()),
-                               ('bg_rgb', bg_rgb_map.detach()),
-                               ('bg_depth', bg_depth_map.detach()),
-                               ('bg_lambda', bg_lambda.detach()),
-                               ('viewdir', viewdirs.detach()),
-                               ('fg_normal_map_postintegral', fg_normal_map_postintegral),
-                               #('bbox', bbox.detach()),
-                               ])
+        depth_values = torch.sum(weights * z_vals, 1, keepdims=True) / (weights.sum(dim=1, keepdims=True) + 1e-8)
+        # we should scale rendered distance to depth along z direction
+        depth_values = depth_scale * depth_values
 
-        return ret
+        # white background assumption
+        if self.white_bkgd:
+            acc_map = torch.sum(weights, -1)
+            rgb_values = rgb_values + (1. - acc_map[..., None]) * self.bg_color.unsqueeze(0)
 
+        output = {
+            'rgb': rgb,
+            'rgb_values': rgb_values,
+            'depth_values': depth_values,
+            'z_vals': z_vals,
+            'depth_vals': z_vals * depth_scale,
+            'sdf': sdf.reshape(z_vals.shape),
+            'weights': weights,
+        }
 
-    def extract_fields(self, bound_min, bound_max, resolution, query_func):
-        N = 128
-        X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
-        Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
-        Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
+        if self.training:
+            # Sample points for the eikonal loss
+            n_eik_points = batch_size * num_pixels
 
-        u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
+            eikonal_points = torch.empty(n_eik_points, 3).uniform_(-self.scene_bounding_sphere,
+                                                                   self.scene_bounding_sphere).cuda()
 
-        with torch.no_grad():
-            for xi, xs in enumerate(X):
-                for yi, ys in enumerate(Y):
-                    for zi, zs in enumerate(Z):
-                        xx, yy, zz = torch.meshgrid(xs, ys, zs)
-                        pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
-                        val = query_func(pts.cuda()).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
-                        u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
-        return u
+            # add some of the near surface points
+            eik_near_points = (cam_loc.unsqueeze(1) + z_samples_eik.unsqueeze(2) * ray_dirs.unsqueeze(1)).reshape(-1, 3)
+            eikonal_points = torch.cat([eikonal_points, eik_near_points], 0)
+            # add some neighbour points as unisurf
+            neighbour_points = eikonal_points + (torch.rand_like(eikonal_points) - 0.5) * 0.01
+            eikonal_points = torch.cat([eikonal_points, neighbour_points], 0)
 
-    def extract_geometry(self, bound_min, bound_max, resolution, threshold, query_func):
-        print('threshold: {}'.format(threshold))
-        field = self.extract_fields(bound_min, bound_max, resolution, query_func)
-        # import cv2
-        # import matplotlib.pyplot as plt
-        # for i in range(0, 63):
-        #     t1 = field[:, :, i]
-        #     t1[t1>1000] = 1000
-        #     cv2.imwrite("/home/youmingdeng/stcut/test{}.jpg".format(i), t1 * 255 / 1000)
-        #     plt.imshow(field[:, :, i], cmap='hot', interpolation='nearest')
-        #     plt.savefig("/home/youmingdeng/stcut/color{}.jpg".format(i))
-        # ForkedPdb().set_trace()
-        # iso_level = extract_iso_level(field, 32)
-        vertices, triangles = mcubes.marching_cubes(field, threshold)
-        b_max_np = bound_max.detach().cpu().numpy()
-        b_min_np = bound_min.detach().cpu().numpy()
-        vertices = vertices / (resolution - 1.0) * (b_max_np - b_min_np)[None, :] + b_min_np[None, :]
-        return vertices, triangles
+            grad_theta = self.implicit_network.gradient(eikonal_points)
 
-    def extract_mesh(self, bound_min, bound_max, resolution, threshold=0.0, iteration=0):
-        return self.extract_geometry(bound_min,
-                                bound_max,
-                                resolution=resolution,
-                                threshold=threshold,
-                                query_func=lambda pts: self.fg_net(self.fg_embedder_position(pts, iteration), mesh_sigma=True))
+            # split gradient to eikonal points and heighbour ponits
+            output['grad_theta'] = grad_theta[:grad_theta.shape[0] // 2]
+            output['grad_theta_nei'] = grad_theta[grad_theta.shape[0] // 2:]
 
-def extract_iso_level(density, iso_level):
-    # Density boundaries
-    min_a, max_a, std_a = density.min(), density.max(), density.std()
+        # compute normal map
+        normals = gradients / (gradients.norm(2, -1, keepdim=True) + 1e-6)
+        normals = normals.reshape(-1, N_samples, 3)
+        normal_map = torch.sum(weights.unsqueeze(-1) * normals, 1)
 
-    # Adaptive iso level
-    iso_value = min(max(iso_level, min_a + std_a), max_a - std_a)
-    print(f"Min density {min_a}, Max density: {max_a}, Mean density {density.mean()}")
-    print(f"Querying based on iso level: {iso_value}")
+        # transform to local coordinate system
+        rot = pose[0, :3, :3].permute(1, 0).contiguous()
+        normal_map = rot @ normal_map.permute(1, 0)
+        normal_map = normal_map.permute(1, 0).contiguous()
 
-    return iso_value
+        output['normal_map'] = normal_map
 
+        return output
 
-def remap_name(name):
-    name = name.replace('.', '-')  # dot is not allowed by pytorch
-    if name[-1] == '/':
-        name = name[:-1]
-    idx = name.rfind('/')
-    for i in range(2):
-        if idx >= 0:
-            idx = name[:idx].rfind('/')
-    return name[idx + 1:]
+    def volume_rendering(self, z_vals, sdf):
+        density_flat = self.density(sdf)
+        density = density_flat.reshape(-1, z_vals.shape[1])  # (batch_size * num_pixels) x N_samples
+
+        dists = z_vals[:, 1:] - z_vals[:, :-1]
+        dists = torch.cat([dists, torch.tensor([1e10]).cuda().unsqueeze(0).repeat(dists.shape[0], 1)], -1)
+
+        # LOG SPACE
+        free_energy = dists * density
+        shifted_free_energy = torch.cat([torch.zeros(dists.shape[0], 1).cuda(), free_energy[:, :-1]],
+                                        dim=-1)  # shift one step
+        alpha = 1 - torch.exp(-free_energy)  # probability of it is not empty here
+        transmittance = torch.exp(
+            -torch.cumsum(shifted_free_energy, dim=-1))  # probability of everything is empty up to now
+        weights = alpha * transmittance  # probability of the ray hits something here
+
+        return weights
 
 
 class NerfNetWithAutoExpo(nn.Module):
