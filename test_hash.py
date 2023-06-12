@@ -25,4 +25,16 @@ import torch
 
 tensor = torch.tensor([[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]).cuda()
 print(tensor)
+print(tensor.shape)
 print(encoding(tensor))
+print(encoding(tensor).shape)
+
+print("grid parameters", len(list(encoding.parameters())))
+for p in encoding.parameters():
+    print(p.shape)
+
+
+from ddp_model_grid import GridNerfNet
+
+conf = None
+grid = GridNerfNet(conf)
