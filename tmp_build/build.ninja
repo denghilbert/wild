@@ -19,8 +19,8 @@ rule cuda_compile
 rule link
   command = $cxx $in $ldflags -o $out
 
-build hashencoder.cuda.o: cuda_compile /home/youmingdeng/inthewild/NeRF-OSR/hashencoder/src/hashencoder.cu
-build bindings.o: compile /home/youmingdeng/inthewild/NeRF-OSR/hashencoder/src/bindings.cpp
+build hashencoder.cuda.o: cuda_compile /home/youmingdeng/inthewild/NeRF-OSR/grid_function/hashencoder/src/hashencoder.cu
+build bindings.o: compile /home/youmingdeng/inthewild/NeRF-OSR/grid_function/hashencoder/src/bindings.cpp
 
 build _hash_encoder.so: link hashencoder.cuda.o bindings.o
 
