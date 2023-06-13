@@ -1,4 +1,4 @@
-from hashencoder.hashgrid import _hash_encode, HashEncoder
+from grid_function.hashencoder.hashgrid import _hash_encode, HashEncoder
 
 geometric_init = True
 bias = 1.0

@@ -28,9 +28,10 @@ class ForkedPdb(pdb.Pdb):
             sys.stdin = _stdin
 
 
-from hashencoder.hashgrid import _hash_encode, HashEncoder
-from density import LaplaceDensity
-from embedder import *
+from grid_function.hashencoder.hashgrid import _hash_encode, HashEncoder
+from grid_function.density import LaplaceDensity
+from grid_function.embedder import *
+from grid_function.ray_sampler import ErrorBoundSampler
 
 class ImplicitNetworkGrid(nn.Module):
     def __init__(
@@ -118,15 +119,12 @@ class ImplicitNetworkGrid(nn.Module):
         self.cache_sdf = None
 
     def forward(self, input1):
-        import pdb
-        pdb.set_trace()
         if self.use_grid_feature:
             # normalize point range as encoding assume points are in [-1, 1]
             feature = self.encoding(input1 / self.divide_factor)
         else:
             feature = torch.zeros_like(input1[:, :1].repeat(1, self.grid_feature_dim))
-        import pdb
-        pdb.set_trace()
+
         if self.embed_fn is not None:
             embed = self.embed_fn(input1)
             input1 = torch.cat((embed, feature), dim=-1)
@@ -246,7 +244,7 @@ class RenderingNetwork(nn.Module):
         self.relu = nn.ReLU()
         self.sigmoid = torch.nn.Sigmoid()
 
-    def forward(self, points, normals, view_dirs, feature_vectors, indices):
+    def forward(self, points, normals, view_dirs, feature_vectors, env):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
 
@@ -258,8 +256,11 @@ class RenderingNetwork(nn.Module):
             raise NotImplementedError
 
         if self.per_image_code:
-            image_code = self.embeddings[indices].expand(rendering_input.shape[0], -1)
-            rendering_input = torch.cat([rendering_input, image_code], dim=-1)
+            # TODO: use env for each image
+            print("we haven't implemented env code for each image")
+            raise NotImplementedError
+            # image_code = self.embeddings[indices].expand(rendering_input.shape[0], -1)
+            # rendering_input = torch.cat([rendering_input, image_code], dim=-1)
 
         x = rendering_input
 
@@ -306,7 +307,7 @@ class GridNerfNet(nn.Module):
         render_dims = [256, 256]
         render_weight_norm = True
         render_multires_view = 4
-        render_per_image_code = True
+        render_per_image_code = False #True
         self.rendering_network = RenderingNetwork(
             self.feature_vector_size, render_mode, render_d_in, render_d_out, render_dims,
             render_weight_norm, render_multires_view, render_per_image_code
@@ -314,28 +315,35 @@ class GridNerfNet(nn.Module):
         grid_beta = {'beta': 0.1}
         grid_beta_min = 0.0001
         self.density = LaplaceDensity(grid_beta, grid_beta_min)
-        import pdb
-        pdb.set_trace()
+        ray_sampler_near = 0.0
+        ray_sampler_N_samples = 64
+        ray_sampler_N_samples_eval = 128
+        ray_sampler_N_samples_extra = 32
+        ray_sampler_eps = 0.1
+        ray_sampler_beta_iters = 10
+        ray_sampler_max_total_iters = 5
+        self.ray_sampler = ErrorBoundSampler(
+            self.scene_bounding_sphere, ray_sampler_near, ray_sampler_N_samples, ray_sampler_N_samples_eval,
+            ray_sampler_N_samples_extra, ray_sampler_eps, ray_sampler_beta_iters, ray_sampler_max_total_iters)
 
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix):
+        ray_dirs, cam_loc = ray_d.unsqueeze(0), ray_o[:1, :]
 
-    def forward(self, input, indices):
-        # Parse model input
-        intrinsics = input["intrinsics"]
-        uv = input["uv"]
-        pose = input["pose"]
-
-        ray_dirs, cam_loc = rend_util.get_camera_params(uv, pose, intrinsics)
-
+        # TODO: use normalized ray direction for depth
+        """how to use normalized ray direction for depth"""
         # we should use unnormalized ray direction for depth
-        ray_dirs_tmp, _ = rend_util.get_camera_params(uv, torch.eye(4).to(pose.device)[None], intrinsics)
-        depth_scale = ray_dirs_tmp[0, :, 2:]
+        # ray_dirs_tmp, _ = rend_util.get_camera_params(uv, torch.eye(4).to(pose.device)[None], intrinsics)
+        # depth_scale = ray_dirs_tmp[0, :, 2:]
+
 
         batch_size, num_pixels, _ = ray_dirs.shape
 
         cam_loc = cam_loc.unsqueeze(1).repeat(1, num_pixels, 1).reshape(-1, 3)
         ray_dirs = ray_dirs.reshape(-1, 3)
 
+        """no sure which one to use"""
         z_vals, z_samples_eik = self.ray_sampler.get_z_vals(ray_dirs, cam_loc, self)
+        # z_vals = fg_z_vals
         N_samples = z_vals.shape[1]
 
         points = cam_loc.unsqueeze(1) + z_vals.unsqueeze(2) * ray_dirs.unsqueeze(1)
@@ -346,7 +354,7 @@ class GridNerfNet(nn.Module):
 
         sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
 
-        rgb_flat = self.rendering_network(points_flat, gradients, dirs_flat, feature_vectors, indices)
+        rgb_flat = self.rendering_network(points_flat, gradients, dirs_flat, feature_vectors, env)
         rgb = rgb_flat.reshape(-1, N_samples, 3)
 
         weights = self.volume_rendering(z_vals, sdf)
@@ -355,19 +363,21 @@ class GridNerfNet(nn.Module):
 
         depth_values = torch.sum(weights * z_vals, 1, keepdims=True) / (weights.sum(dim=1, keepdims=True) + 1e-8)
         # we should scale rendered distance to depth along z direction
-        depth_values = depth_scale * depth_values
+        # TODO
+        # depth_values = depth_scale * depth_values
 
         # white background assumption
         if self.white_bkgd:
             acc_map = torch.sum(weights, -1)
             rgb_values = rgb_values + (1. - acc_map[..., None]) * self.bg_color.unsqueeze(0)
 
+        # TODO: depth_values and depth_scale do not have depth scale
         output = {
             'rgb': rgb,
             'rgb_values': rgb_values,
             'depth_values': depth_values,
             'z_vals': z_vals,
-            'depth_vals': z_vals * depth_scale,
+            'depth_vals': z_vals,# * depth_scale,
             'sdf': sdf.reshape(z_vals.shape),
             'weights': weights,
         }
@@ -398,7 +408,8 @@ class GridNerfNet(nn.Module):
         normal_map = torch.sum(weights.unsqueeze(-1) * normals, 1)
 
         # transform to local coordinate system
-        rot = pose[0, :3, :3].permute(1, 0).contiguous()
+        # rot = pose[0, :3, :3].permute(1, 0).contiguous()
+        rot = c2w[:3, :3].permute(1, 0).contiguous()
         normal_map = rot @ normal_map.permute(1, 0)
         normal_map = normal_map.permute(1, 0).contiguous()
 
@@ -424,6 +435,15 @@ class GridNerfNet(nn.Module):
 
         return weights
 
+def remap_name(name):
+    name = name.replace('.', '-')  # dot is not allowed by pytorch
+    if name[-1] == '/':
+        name = name[:-1]
+    idx = name.rfind('/')
+    for i in range(2):
+        if idx >= 0:
+            idx = name[:idx].rfind('/')
+    return name[idx + 1:]
 
 class NerfNetWithAutoExpo(nn.Module):
     def __init__(self, args, optim_autoexpo=False, img_names=None):
@@ -472,7 +492,7 @@ class NerfNetWithAutoExpo(nn.Module):
                 [-7.2674e-02, 4.5177e-02, 2.2858e-01]
         ], dtype=torch.float32))
 
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None, save_memory4validation=False):
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None, save_memory4validation=False, c2w=None, intrinsic=None, ray_matrix=None):
         '''
         :param ray_o, ray_d: [..., 3]
         :param fg_z_max: [...,]
@@ -514,7 +534,7 @@ class NerfNetWithAutoExpo(nn.Module):
             env = env.reshape(old_shape)
 
 
-        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, save_memory4validation=save_memory4validation)
+        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix)
         if self.optim_autoexpo and (img_name in self.autoexpo_params):
             autoexpo = self.autoexpo_params[img_name]
             scale = torch.abs(autoexpo[0]) + 0.5  # make sure scale is always positive
