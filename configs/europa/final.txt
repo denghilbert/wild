@@ -38,29 +38,3 @@ activation = relu
 i_img = 10000
 i_print = 100
 i_weights = 10000
-
-### GRID NERF PARAMETERS
-grid_feature_vector_size = 256
-# grid net
-grid_net_d_in = 3
-grid_net_d_out = 1
-grid_net_dims = [256, 256]
-grid_net_geometric_init = True
-grid_net_bias = 0.6
-grid_net_skip_in = [4]
-grid_net_weight_norm = True
-grid_net_multires = 6
-grid_net_inside_outside = True
-grid_net_use_grid_feature = True
-grid_net_divide_factor = 1.0
-# rendering net
-mode = 'idr'
-d_in = 9
-d_out = 3
-dims = [256, 256]
-weight_norm = True
-multires_view = 4
-per_image_code = True
-# density net
-beta = 0.1
-beta_min = 0.0001

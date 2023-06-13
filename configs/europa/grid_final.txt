@@ -1,0 +1,74 @@
+### INPUT
+datadir = data/europa
+scene = final
+expname = europa_final
+basedir = logs
+config = None
+ckpt_path = None
+no_reload = False
+testskip = 1
+
+### TRAINING
+N_iters = 5000001
+N_rand = 1024
+lrate = 0.0005
+lrate_decay_factor = 0.1
+lrate_decay_steps = 50000000
+
+### CASCADE
+cascade_level = 2
+cascade_samples = 64128
+
+### TESTING
+chunk_size = 8192
+
+### RENDERING
+det = False
+max_freq_log2 = 12
+max_freq_log2_viewdirs = 4
+N_anneal = 30000
+N_anneal_min_freq = 8
+N_anneal_min_freq_viewdirs = 4
+netdepth = 8
+netwidth = 256
+use_viewdirs = False
+activation = relu
+
+### CONSOLE AND TENSORBOARD
+i_img = 10000
+i_print = 100
+i_weights = 10000
+
+### GRID NERF PARAMETERS
+grid_feature_vector_size = 256
+# grid net
+grid_net_d_in = 3
+grid_net_d_out = 1
+grid_net_dims = [256, 256]
+grid_net_geometric_init = True
+grid_net_bias = 0.6
+grid_net_skip_in = [4]
+grid_net_weight_norm = True
+grid_net_multires = 6
+grid_net_inside_outside = True
+grid_net_use_grid_feature = True
+grid_net_divide_factor = 1.0
+# rendering net
+render_mode = 'idr'
+render_d_in = 9
+render_d_out = 3
+render_dims = [256, 256]
+render_weight_norm = True
+render_multires_view = 4
+render_per_image_code = True
+# density net
+density_grid_beta = 0.1
+density_grid_beta_min = 0.0001
+# ray_sampler
+ray_sampler_near = 0.0
+ray_sampler_N_samples = 64
+ray_sampler_N_samples_eval = 128
+ray_sampler_N_samples_extra = 32
+ray_sampler_eps = 0.1
+ray_sampler_beta_iters = 10
+ray_sampler_max_total_iters = 5
