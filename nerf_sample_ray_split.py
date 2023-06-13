@@ -3,7 +3,21 @@ from collections import OrderedDict
 import torch
 import cv2
 import imageio
+import sys
+import pdb
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
 
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 ########################################################################################################################
 # ray batch sampling
 ########################################################################################################################
@@ -126,7 +140,7 @@ class RaySamplerSingleImage(object):
                 ret[k] = torch.from_numpy(ret[k])
         return ret
 
-    def random_sample(self, N_rand, center_crop=False):
+    def random_sample(self, N_rand, center_crop=False, with_pose_intrinsic=False):
         '''
         :param N_rand: number of rays to be casted
         :return:
@@ -180,15 +194,30 @@ class RaySamplerSingleImage(object):
         else:
             min_depth = 1e-4 * np.ones_like(rays_d[..., 0])
 
-        ret = OrderedDict([
-            ('ray_o', rays_o),
-            ('ray_d', rays_d),
-            ('depth', depth),
-            ('rgb', rgb),
-            ('mask', mask),
-            ('min_depth', min_depth),
-            ('img_name', self.img_path)
-        ])
+        if with_pose_intrinsic == False:
+            ret = OrderedDict([
+                ('ray_o', rays_o),
+                ('ray_d', rays_d),
+                ('depth', depth),
+                ('rgb', rgb),
+                ('mask', mask),
+                ('min_depth', min_depth),
+                ('img_name', self.img_path)
+            ])
+        else:
+            ret = OrderedDict([
+                ('ray_o', rays_o),
+                ('ray_d', rays_d),
+                ('depth', depth),
+                ('rgb', rgb),
+                ('mask', mask),
+                ('min_depth', min_depth),
+                ('img_name', self.img_path),
+
+                ('c2w', self.c2w_mat),
+                ('intrinsic', self.intrinsics),
+                ('ray_matrix', ray_matrix),
+            ])
         # return torch tensors
         for k in ret:
             if isinstance(ret[k], np.ndarray):
