@@ -144,7 +144,7 @@ def sample_pdf(bins, weights, N_samples, det=False):
 
 def render_single_image(rank, world_size, models, ray_sampler, chunk_size, iteration, rot_angle=0, img_name=None):
     ##### parallel rendering of a single image
-    ray_batch = ray_sampler.get_all()
+    ray_batch = ray_sampler.get_all(with_pose_intrinsic=True)
 
     fixed = 0
     if (ray_batch['ray_d'].shape[0] // world_size) * world_size != ray_batch['ray_d'].shape[0]:
@@ -158,8 +158,9 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
     # split into ranks; make sure different processes don't overlap
     rank_split_sizes = [ray_batch['ray_d'].shape[0] // world_size, ] * world_size
     rank_split_sizes[-1] = ray_batch['ray_d'].shape[0] - sum(rank_split_sizes[:-1])
+
     for key in ray_batch:
-        if torch.is_tensor(ray_batch[key]):
+        if torch.is_tensor(ray_batch[key]) and key != 'c2w' and key != 'intrinsic':
             ray_batch[key] = torch.split(ray_batch[key], rank_split_sizes)[rank].to(rank)
 
     # split into chunks and render inside each process
@@ -225,7 +226,7 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
                 ret = net(ray_o, ray_d, fg_far_depth, fg_depth, bg_depth, iteration,
                           img_name=ray_sampler.img_path if img_name is None else img_name,
                           rot_angle=rot_angle, save_memory4validation=True,
-                          c2w=ray_batch['c2w'], intrinsic=ray_batch['intrinsic'])
+                          c2w=ray_batch['c2w'], intrinsic=ray_batch['intrinsic'], validation=True)
 
             for key in ret:
                 if key not in ['fg_weights', 'bg_weights']:
@@ -355,7 +356,7 @@ def relight_rotation_single_image(rank, world_size, models, ray_sampler, chunk_s
                 ret = net(ray_o, ray_d, fg_far_depth, fg_depth, bg_depth, iteration,
                           img_name=ray_sampler.img_path if img_name is None else img_name,
                           rot_angle=rot_angle, save_memory4validation=True,
-                          c2w=ray_batch['c2w'], intrinsic=ray_batch['intrinsic'])
+                          c2w=ray_batch['c2w'], intrinsic=ray_batch['intrinsic'], validation=True)
 
             for key in ret:
                 if key not in ['fg_weights', 'bg_weights']:
@@ -597,8 +598,8 @@ def ddp_train_nerf(rank, args, one_card=False):
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
         logger.info('setting batch size according to 24G gpu')
-        args.N_rand = 2048
-        args.chunk_size = 4096
+        args.N_rand = 4096#2048
+        args.chunk_size = 8192#4096
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9:
         logger.info('setting batch size according to 12G gpu')
         args.N_rand = 512
@@ -776,7 +777,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 loss = rgb_loss + \
                        args.eikonal_weight * eikonal_loss + \
                        args.smooth_weight * smooth_loss
-            ForkedPdb().set_trace()
+
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
@@ -820,7 +821,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             torch.save(to_save, fpath)
 
         ### each process should do this; but only main process merges the results
-        if (global_step % args.i_img == 0 and global_step != 0) or (global_step == start + 1 and args.start_val):
+        if (global_step % args.i_img == 0 and global_step != 0) or (global_step == 0 and args.start_val) or (global_step == start + 1 and args.start_val):
             #### critical: make sure each process is working on the same random image
             time0 = time.time()
             idx = what_val_to_log % len(val_ray_samplers)
@@ -838,7 +839,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 args.chunk_size = int(args.chunk_size / 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
-                args.chunk_size = int(args.chunk_size / 1.5)
+                args.chunk_size = int(args.chunk_size / 1.)
 
             ## debug: get SH and rot SH
             # SH = models['net_1'].module.env_params['train/rgb/26-04_19_00_DSC_2474-jpg'].cpu().detach().numpy()

@@ -120,20 +120,33 @@ class RaySamplerSingleImage(object):
             # print('bad get_img', self.img_path)
             return None
 
-    def get_all(self):
+    def get_all(self, with_pose_intrinsic=False):
         if self.min_depth is not None:
             min_depth = self.min_depth
         else:
             min_depth = 1e-4 * np.ones_like(self.rays_d[..., 0])
 
-        ret = OrderedDict([
-            ('ray_o', self.rays_o),
-            ('ray_d', self.rays_d),
-            ('depth', self.depth),
-            ('rgb', self.img),
-            ('mask', self.mask),
-            ('min_depth', min_depth),
-        ])
+        if with_pose_intrinsic == False:
+            ret = OrderedDict([
+                ('ray_o', self.rays_o),
+                ('ray_d', self.rays_d),
+                ('depth', self.depth),
+                ('rgb', self.img),
+                ('mask', self.mask),
+                ('min_depth', min_depth),
+            ])
+        else:
+            ret = OrderedDict([
+                ('ray_o', self.rays_o),
+                ('ray_d', self.rays_d),
+                ('depth', self.depth),
+                ('rgb', self.img),
+                ('mask', self.mask),
+                ('min_depth', min_depth),
+
+                ('c2w', self.c2w_mat),
+                ('intrinsic', self.intrinsics),
+            ])
         # return torch tensors
         for k in ret:
             if ret[k] is not None:

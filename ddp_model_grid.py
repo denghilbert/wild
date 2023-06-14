@@ -326,7 +326,7 @@ class GridNerfNet(nn.Module):
             self.scene_bounding_sphere, ray_sampler_near, ray_sampler_N_samples, ray_sampler_N_samples_eval,
             ray_sampler_N_samples_extra, ray_sampler_eps, ray_sampler_beta_iters, ray_sampler_max_total_iters)
 
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix):
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix, validation=False):
         ray_dirs, cam_loc = ray_d.unsqueeze(0), ray_o[:1, :]
 
         # TODO: use normalized ray direction for depth
@@ -352,7 +352,9 @@ class GridNerfNet(nn.Module):
         dirs = ray_dirs.unsqueeze(1).repeat(1, N_samples, 1)
         dirs_flat = dirs.reshape(-1, 3)
 
-        sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
+        # important !!! we should enable_grad within no_grad wrap
+        with torch.enable_grad():
+            sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
 
         rgb_flat = self.rendering_network(points_flat, gradients, dirs_flat, feature_vectors, env)
         rgb = rgb_flat.reshape(-1, N_samples, 3)
@@ -382,7 +384,7 @@ class GridNerfNet(nn.Module):
             'weights': weights,
         }
 
-        if self.training:
+        if self.training and (validation == False):
             # Sample points for the eikonal loss
             n_eik_points = batch_size * num_pixels
 
@@ -492,7 +494,7 @@ class NerfNetWithAutoExpo(nn.Module):
                 [-7.2674e-02, 4.5177e-02, 2.2858e-01]
         ], dtype=torch.float32))
 
-    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None, save_memory4validation=False, c2w=None, intrinsic=None, ray_matrix=None):
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, iteration, img_name=None, rot_angle=None, save_memory4validation=False, c2w=None, intrinsic=None, ray_matrix=None, validation=False):
         '''
         :param ray_o, ray_d: [..., 3]
         :param fg_z_max: [...,]
@@ -534,7 +536,7 @@ class NerfNetWithAutoExpo(nn.Module):
             env = env.reshape(old_shape)
 
 
-        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix)
+        ret = self.nerf_net(ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix, validation=validation)
         if self.optim_autoexpo and (img_name in self.autoexpo_params):
             autoexpo = self.autoexpo_params[img_name]
             scale = torch.abs(autoexpo[0]) + 0.5  # make sure scale is always positive
