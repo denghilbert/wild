@@ -407,7 +407,7 @@ def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, pref
     save_image(output_dir + prefix + 'rgb_gt.png', 255*gt_img)
 
     for m in range(len(log_data)):
-        rgb_im = (log_data[m]['rgb'])
+        rgb_im = (log_data[m]['rgb_values'])
         rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
         save_image(output_dir + prefix + 'level_{}_rgb.png'.format(m), 255*rgb_im.numpy())
@@ -625,8 +625,8 @@ def ddp_train_nerf(rank, args, one_card=False):
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
         logger.info('setting batch size according to 24G gpu')
-        args.N_rand = 32#2048
-        args.chunk_size = 64#4096
+        args.N_rand = 2048
+        args.chunk_size = 4096
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9:
         logger.info('setting batch size according to 12G gpu')
         args.N_rand = 512
@@ -768,7 +768,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 scalars_to_log['level_{}/autoexpo_scale'.format(m)] = scale.item()
                 scalars_to_log['level_{}/autoexpo_shift'.format(m)] = shift.item()
                 # rgb_gt = scale * rgb_gt + shift
-                rgb_pred = (ret['rgb'] - shift) / scale
+                rgb_pred = (ret['rgb_values'] - shift) / scale
                 rgb_loss = img2mse(rgb_pred, rgb_gt)
 
                 if args.normal_loss_weight != -1 and global_step >= 50000:
@@ -790,11 +790,11 @@ def ddp_train_nerf(rank, args, one_card=False):
                     loss = rgb_loss + args.lambda_autoexpo * (torch.abs(scale - 1.) + torch.abs(shift)) + \
                            args.normal_loss_weight * normal_direction_loss
             else:
-                # zeros = ret['rgb'] * 0
+                # zeros = ret['rgb_values'] * 0
                 # rgb_loss = img2mse(ret['pure_rgb'], torch.min(rgb_gt/ret['shadow'], ones))
                 # rgb_loss = img2mse(ret['pure_rgb'], torch.max(rgb_gt/ret['shadow'], zeros))
-                # rgb_loss = img2mse(ret['rgb'], rgb_gt)
-                rgb_loss = img2mse(ret['rgb'], rgb_gt, mask=mask)
+                # rgb_loss = img2mse(ret['rgb_values'], rgb_gt)
+                rgb_loss = img2mse(ret['rgb_values'], rgb_gt, mask=mask)
                 shadow_reg = torch.mean((1 - ret['shadow']) ** 2)
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
@@ -893,7 +893,7 @@ def ddp_train_nerf(rank, args, one_card=False):
             #     os.makedirs(reli_dir, exist_ok=True)
             #     if rank == 0:
             #         for m in range(len(reli_data)):
-            #             rgb_im = (reli_data[m]['rgb'])
+            #             rgb_im = (reli_data[m]['rgb_values'])
             #             rgb_im = torch.clamp(rgb_im, min=0., max=1.)  # just in case diffuse+specular>1
             #             # writer.add_image(prefix + 'level_{}/rgb'.format(m), rgb_im, global_step)
             #             save_image(reli_dir + '/level_1_rgb{}.png'.format(i), 255 * rgb_im.numpy())
