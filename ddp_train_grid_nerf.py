@@ -535,7 +535,18 @@ def create_nerf(rank, args):
         net = NerfNetWithAutoExpo(args, optim_autoexpo=args.optim_autoexpo, img_names=img_names).to(rank)
         net = DDP(net, device_ids=[rank], output_device=rank, find_unused_parameters=True)
         # net = DDP(net, device_ids=[rank], output_device=rank)
-        optim = torch.optim.Adam(net.parameters(), lr=args.lrate)
+        # optim = torch.optim.Adam(net.parameters(), lr=args.lrate)
+        optim = torch.optim.Adam([
+            {'name': 'encoding', 'params': list(net.module.nerf_net.implicit_network.grid_parameters()),
+             'lr': args.lr_grid * args.lr_factor_for_grid},
+            {'name': 'net', 'params': list(net.module.nerf_net.implicit_network.mlp_parameters()) + \
+                                      list(net.module.nerf_net.rendering_network.parameters()),
+             'lr': args.lr_grid},
+            {'name': 'density', 'params': list(net.module.nerf_net.density.parameters()),
+             'lr': args.lr_grid},
+            # {'name': 'env', 'params': list(net.module.env_params.parameters()),
+            #  'lr': args.lr_grid},
+        ], betas=(0.9, 0.99), eps=1e-15)
         models['net_{}'.format(m)] = net
         models['optim_{}'.format(m)] = optim
 
@@ -1115,6 +1126,9 @@ def config_parser():
     parser.add_argument("--ray_sampler_eps", type=float, default=0.1)
     parser.add_argument("--ray_sampler_beta_iters", type=int, default=10)
     parser.add_argument("--ray_sampler_max_total_iters", type=int, default=5)
+    # grid lr
+    parser.add_argument("--lr_grid", type=float, default=0.0005)
+    parser.add_argument("--lr_factor_for_grid", type=float, default=20.0)
 
     return parser
 
