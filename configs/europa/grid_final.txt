@@ -72,3 +72,9 @@ ray_sampler_N_samples_extra = 32
 ray_sampler_eps = 0.1
 ray_sampler_beta_iters = 10
 ray_sampler_max_total_iters = 5
+# grid lr
+lr_grid = 0.0005
+lr_factor_for_grid = 20.0
+# grid weights
+eikonal_weight = 0.1
+smooth_weight = 0.005
