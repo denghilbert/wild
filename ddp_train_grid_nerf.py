@@ -479,6 +479,15 @@ def get_eikonal_loss(mean_normal_grad):
     eikonal_loss = ((mean_normal_grad.norm(2, dim=1) - 1) ** 2).mean()
     return eikonal_loss
 
+def get_smooth_loss(grad_theta, grad_theta_nei):
+    # smoothness loss as unisurf
+    g1 = grad_theta
+    g2 = grad_theta_nei
+
+    normals_1 = g1 / (g1.norm(2, dim=1).unsqueeze(-1) + 1e-5)
+    normals_2 = g2 / (g2.norm(2, dim=1).unsqueeze(-1) + 1e-5)
+    smooth_loss = torch.norm(normals_1 - normals_2, dim=-1).mean()
+    return smooth_loss
 
 def setup(rank, world_size, master_port):
     # initialize the process group
@@ -765,7 +774,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                       bg_depth, global_step, img_name=ray_batch['img_name'],
                       c2w=ray_batch['c2w'], intrinsic=ray_batch['intrinsic'], ray_matrix=ray_batch['ray_matrix'])
             all_rets.append(ret)
-            ForkedPdb().set_trace()
+
             rgb_gt = ray_batch['rgb'].to(rank)
 
             if ray_batch['mask'] is not None:
@@ -806,38 +815,26 @@ def ddp_train_nerf(rank, args, one_card=False):
                 # rgb_loss = img2mse(ret['pure_rgb'], torch.max(rgb_gt/ret['shadow'], zeros))
                 # rgb_loss = img2mse(ret['rgb_values'], rgb_gt)
                 rgb_loss = img2mse(ret['rgb_values'], rgb_gt, mask=mask)
-                shadow_reg = torch.mean((1 - ret['shadow']) ** 2)
-                if not args.use_shadow_reg:
-                    shadow_reg = 0 * shadow_reg
-
-                if args.normal_loss_weight != -1 and global_step >= 20000:
-                    # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
-                    # important !!!
-                    fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
-                    fg_normal = ret['fg_normal'].unsqueeze(-2).expand(ret['fg_normal_map_postintegral'].shape)
-                    cosine = torch.sum(fg_normal_map_postintegral * fg_normal, dim=-1)
-                    normal_direction_loss = (((1 - cosine)**2) * ret['fg_weights']).mean()
-                    # normal_direction_loss = ((1 - cosine)) * ret['fg_weights']
+                if 'grad_theta' in ret:
+                    eikonal_loss = get_eikonal_loss(ret['grad_theta'])
                 else:
-                    normal_direction_loss = torch.tensor(0.0).cuda().float()
+                    eikonal_loss = torch.tensor(0.0).cuda().float()
+                smooth_loss = get_smooth_loss(ret['grad_theta'], ret['grad_theta_nei'])
 
-                """just avoid trivial solution at first 10 step, I don't even know why it have such huge effect...."""
-                if global_step < 10:
-                    loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                           (args.normal_loss_weight / 100000) * normal_direction_loss
-                else:
-                    loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                           args.normal_loss_weight * normal_direction_loss
+                loss = rgb_loss + \
+                       args.eikonal_weight * eikonal_loss + \
+                       args.smooth_weight * smooth_loss
+            ForkedPdb().set_trace()
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'pnsr', mse2psnr(rgb_loss.item()), global_step)
-                writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
-                writer_loss.add_scalar('level{}'.format(m) + 'normal_direction_loss', normal_direction_loss.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'eikonal_loss', eikonal_loss.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'smooth_loss', smooth_loss.item(), global_step)
                 scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
                 scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
-                scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
-                scalars_to_log['level_{}/normal_direction_loss'.format(m)] = normal_direction_loss.item()
+                scalars_to_log['level_{}/eikonal_loss'.format(m)] = eikonal_loss.item()
+                scalars_to_log['level_{}/smooth_loss'.format(m)] = smooth_loss.item()
 
 
             loss.backward()
@@ -1129,6 +1126,9 @@ def config_parser():
     # grid lr
     parser.add_argument("--lr_grid", type=float, default=0.0005)
     parser.add_argument("--lr_factor_for_grid", type=float, default=20.0)
+    # grid weight
+    parser.add_argument("--eikonal_weight", type=float, default=0.1)
+    parser.add_argument("--smooth_weight", type=float, default=0.005)
 
     return parser
 
