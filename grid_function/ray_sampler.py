@@ -128,6 +128,10 @@ class ErrorBoundSampler(RaySampler):
         if inverse_sphere_bg:
             self.inverse_sphere_sampler = UniformSampler(1.0, 0.0, N_samples_inverse_sphere, False, far=1.0)
 
+    def upsamplying_by2(self):
+        self.N_samples = self.N_samples * 2
+        self.N_samples_extra = self.N_samples_extra * 2
+
     def get_z_vals(self, ray_dirs, cam_loc, model):
         beta0 = model.density.get_beta().detach()
 
