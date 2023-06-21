@@ -353,7 +353,10 @@ class GridNerfNet(nn.Module):
         dirs_flat = dirs.reshape(-1, 3)
 
         # important !!! we should enable_grad within no_grad wrap
-        with torch.enable_grad():
+        if validation == True:
+            with torch.enable_grad():
+                sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
+        else:
             sdf, feature_vectors, gradients = self.implicit_network.get_outputs(points_flat)
 
         rgb_flat = self.rendering_network(points_flat, gradients, dirs_flat, feature_vectors, env)
@@ -411,9 +414,9 @@ class GridNerfNet(nn.Module):
 
         # transform to local coordinate system
         # rot = pose[0, :3, :3].permute(1, 0).contiguous()
-        rot = c2w[:3, :3].permute(1, 0).contiguous()
-        normal_map = rot @ normal_map.permute(1, 0)
-        normal_map = normal_map.permute(1, 0).contiguous()
+        # rot = c2w[:3, :3].permute(1, 0).contiguous()
+        # normal_map = rot @ normal_map.permute(1, 0)
+        # normal_map = normal_map.permute(1, 0).contiguous()
 
         output['normal_map'] = normal_map
 
