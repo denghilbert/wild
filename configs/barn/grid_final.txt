@@ -1,7 +1,7 @@
 ### INPUT
-datadir = data/europa
+datadir = data/barn
 scene = final
-expname = europa_final
+expname = barn_final
 basedir = logs
 config = None
 ckpt_path = None
@@ -17,7 +17,7 @@ lrate_decay_steps = 50000000
 
 ### CASCADE
 cascade_level = 1
-cascade_samples = 64128
+cascade_samples = 64,128
 
 ### TESTING
 chunk_size = 8192

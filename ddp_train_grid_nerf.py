@@ -598,8 +598,8 @@ def ddp_train_nerf(rank, args, one_card=False):
     logger.info('gpu_mem: {}'.format(torch.cuda.get_device_properties(rank).total_memory))
     if torch.cuda.get_device_properties(rank).total_memory / 1e9 > 25:
         logger.info('setting batch size according to 24G gpu')
-        args.N_rand = 4096#2048
-        args.chunk_size = 8192#4096
+        args.N_rand = 2048
+        args.chunk_size = 4096
     elif torch.cuda.get_device_properties(rank).total_memory / 1e9 > 9:
         logger.info('setting batch size according to 12G gpu')
         args.N_rand = 512
@@ -677,6 +677,7 @@ def ddp_train_nerf(rank, args, one_card=False):
         for m in range(models['cascade_level']):
             optim = models['optim_{}'.format(m)]
             net = models['net_{}'.format(m)]
+
             if global_step == 2000:
                 print("upsamplying_by2")
                 print(net.module.nerf_net.ray_sampler.N_samples)
@@ -684,6 +685,13 @@ def ddp_train_nerf(rank, args, one_card=False):
                 net.module.nerf_net.ray_sampler.upsamplying_by2()
                 print(net.module.nerf_net.ray_sampler.N_samples)
                 print(net.module.nerf_net.ray_sampler.N_samples_extra)
+            # if global_step == 4000:
+            #     print("upsamplying_by1.5")
+            #     print(net.module.nerf_net.ray_sampler.N_samples)
+            #     print(net.module.nerf_net.ray_sampler.N_samples_extra)
+            #     net.module.nerf_net.ray_sampler.upsamplying_by1_5()
+            #     print(net.module.nerf_net.ray_sampler.N_samples)
+            #     print(net.module.nerf_net.ray_sampler.N_samples_extra)
 
             ## debug: how to cube marching
             # vertices, triangles = net.module.nerf_net.extract_mesh(torch.tensor([-0.3, -0.3, -0.3]).cuda(), torch.tensor([0.3, 0.3, 0.3]).cuda(), 256, 200, global_step)
@@ -741,6 +749,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 mask = ray_batch['mask'].to(rank)
             else:
                 mask = None
+
 
             if 'autoexpo' in ret:
                 assert (False)
@@ -846,7 +855,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 args.chunk_size = int(args.chunk_size / 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
-                args.chunk_size = int(args.chunk_size / 1.5)
+                args.chunk_size = int(args.chunk_size / 1.0)
 
             ## debug: get SH and rot SH
             # SH = models['net_1'].module.env_params['train/rgb/26-04_19_00_DSC_2474-jpg'].cpu().detach().numpy()
@@ -911,7 +920,7 @@ def ddp_train_nerf(rank, args, one_card=False):
                 args.chunk_size = int(args.chunk_size * 4)
             else:
                 logger.info('original chunk_size for validation part according to 24G gpu')
-                args.chunk_size = int(args.chunk_size * 1.5)
+                args.chunk_size = int(args.chunk_size * 1.0)
             # change back chunk_size for validation on 1080Ti
             ###############################################
 

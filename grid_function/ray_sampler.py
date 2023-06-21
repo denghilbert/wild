@@ -132,6 +132,10 @@ class ErrorBoundSampler(RaySampler):
         self.N_samples = self.N_samples * 2
         self.N_samples_extra = self.N_samples_extra * 2
 
+    def upsamplying_by1_5(self):
+        self.N_samples = int(self.N_samples * 1.5)
+        self.N_samples_extra = int(self.N_samples_extra * 1.5)
+
     def get_z_vals(self, ray_dirs, cam_loc, model):
         beta0 = model.density.get_beta().detach()
 
