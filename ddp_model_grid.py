@@ -32,6 +32,7 @@ from grid_function.hashencoder.hashgrid import _hash_encode, HashEncoder
 from grid_function.density import LaplaceDensity
 from grid_function.embedder import *
 from grid_function.ray_sampler import ErrorBoundSampler
+import torch.nn.functional as F
 
 class ImplicitNetworkGrid(nn.Module):
     def __init__(
@@ -47,11 +48,11 @@ class ImplicitNetworkGrid(nn.Module):
             multires=0,
             sphere_scale=1.0,
             inside_outside=False,
-            base_size=16,
-            end_size=2048,
-            logmap=19,
+            base_size=64,#16,
+            end_size=8192, #2048,
+            logmap=22, #19,
             num_levels=16,
-            level_dim=2,
+            level_dim=8,#2,
             divide_factor=1.5,  # used to normalize the points range for multi-res grid
             use_grid_feature=True
     ):
@@ -216,6 +217,8 @@ class RenderingNetwork(nn.Module):
             embedview_fn, input_ch = get_embedder(multires_view)
             self.embedview_fn = embedview_fn
             dims[0] += (input_ch - 3)
+            dims[0] += (input_ch - 3)
+            dims[0] += (input_ch - 3)
 
         self.per_image_code = per_image_code
         if self.per_image_code:
@@ -225,7 +228,9 @@ class RenderingNetwork(nn.Module):
             self.embeddings = nn.Parameter(torch.empty(1024, 32))
             std = 1e-4
             self.embeddings.data.uniform_(-std, std)
-            dims[0] += 32
+            # dims[0] += 32
+            # change to SH case!
+            dims[0] += 9
 
         print("rendering network architecture:")
         print(dims)
@@ -247,6 +252,8 @@ class RenderingNetwork(nn.Module):
     def forward(self, points, normals, view_dirs, feature_vectors, env):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
+            points = self.embedview_fn(points)
+            normals = self.embedview_fn(normals)
 
         if self.mode == 'idr':
             rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
@@ -257,10 +264,11 @@ class RenderingNetwork(nn.Module):
 
         if self.per_image_code:
             # TODO: use env for each image
-            print("we haven't implemented env code for each image")
-            raise NotImplementedError
-            # image_code = self.embeddings[indices].expand(rendering_input.shape[0], -1)
-            # rendering_input = torch.cat([rendering_input, image_code], dim=-1)
+            # print("we haven't implemented env code for each image")
+            # raise NotImplementedError
+            env_gray = env[..., 0] * 0.2126 + env[..., 1] * 0.7152 + env[..., 2] * 0.0722
+            image_code = env_gray.expand(rendering_input.shape[0], -1)
+            rendering_input = torch.cat([rendering_input, image_code], dim=-1)
 
         x = rendering_input
 
@@ -304,7 +312,7 @@ class GridNerfNet(nn.Module):
         render_mode = 'idr'
         render_d_in = 9
         render_d_out = 3
-        render_dims = [256, 256]
+        render_dims = [256, 256, 256, 256]
         render_weight_norm = True
         render_multires_view = 4
         render_per_image_code = False #True
@@ -348,7 +356,6 @@ class GridNerfNet(nn.Module):
 
         points = cam_loc.unsqueeze(1) + z_vals.unsqueeze(2) * ray_dirs.unsqueeze(1)
         points_flat = points.reshape(-1, 3)
-
         dirs = ray_dirs.unsqueeze(1).repeat(1, N_samples, 1)
         dirs_flat = dirs.reshape(-1, 3)
 
@@ -411,7 +418,7 @@ class GridNerfNet(nn.Module):
         normals = gradients / (gradients.norm(2, -1, keepdim=True) + 1e-6)
         normals = normals.reshape(-1, N_samples, 3)
         normal_map = torch.sum(weights.unsqueeze(-1) * normals, 1)
-
+        normal_map = F.normalize(normal_map, p=2, dim=-1)
         # transform to local coordinate system
         # rot = pose[0, :3, :3].permute(1, 0).contiguous()
         # rot = c2w[:3, :3].permute(1, 0).contiguous()
