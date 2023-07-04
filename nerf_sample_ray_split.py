@@ -112,7 +112,7 @@ class RaySamplerSingleImage(object):
                 self.normal = self.normal.reshape((-1, 3))
             else:
                 self.normal = None
-                
+
             if self.min_depth_path is not None:
                 self.min_depth = imageio.imread(self.min_depth_path).astype(np.float32) / 255. * self.max_depth + 1e-4
                 self.min_depth = cv2.resize(self.min_depth, (self.W, self.H), interpolation=cv2.INTER_LINEAR)

@@ -86,7 +86,7 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
     # GT normal files
     normal_files = find_files(split_dir.split('final/')[0] + 'final/normal/', exts=['*.png', '*.jpg', '*.JPG', '*.PNG'])
     if len(normal_files) > 0:
-        normal_files = [fn.split('final/')[0] + 'final/normal/' + fn.split('mask/')[1].split('.png')[0] + '_normal_correct.png' for fn in mask_files]
+        normal_files = [fn.split('final/')[0] + 'final/normal/' + fn.split('rgb/')[1].split('.')[0] + '_normal_correct.png' for fn in img_files]
     else:
         normal_files = [None, ] * cam_cnt
 
