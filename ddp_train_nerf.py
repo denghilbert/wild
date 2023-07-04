@@ -690,6 +690,7 @@ def ddp_train_nerf(rank, args, one_card=False):
         # randomly sample rays and move to device
         i = np.random.randint(low=0, high=len(ray_samplers))
         ray_batch = ray_samplers[i].random_sample(args.N_rand, center_crop=False)
+
         for key in ray_batch:
             if torch.is_tensor(ray_batch[key]):
                 ray_batch[key] = ray_batch[key].to(rank)
@@ -912,7 +913,6 @@ def ddp_train_nerf(rank, args, one_card=False):
                 bbox_min = torch.min((ray_o + log_data[1]['fg_depth'].reshape(-1, 1) * ray_d).T, 1)[0]
                 bbox = torch.cat((bbox_min.unsqueeze(0), bbox_max.unsqueeze(0))).T
                 print(bbox)
-            # ForkedPdb().set_trace()
 
             if rank == 0:  # only main process should do this
                 logger.info('Logged a random validation view in {} seconds'.format(dt))

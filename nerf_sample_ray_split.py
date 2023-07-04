@@ -59,6 +59,7 @@ class RaySamplerSingleImage(object):
                        img_path=None,
                        resolution_level=1,
                        mask_path=None,
+                       normal_path=None,
                        min_depth_path=None,
                        max_depth=None,
                        use_ray_jitter=True):
@@ -70,6 +71,7 @@ class RaySamplerSingleImage(object):
 
         self.img_path = img_path
         self.mask_path = mask_path
+        self.normal_path = normal_path
         self.min_depth_path = min_depth_path
         self.max_depth = max_depth
 
@@ -103,6 +105,13 @@ class RaySamplerSingleImage(object):
             else:
                 self.mask = None
 
+            if self.normal_path is not None:
+                self.normal = imageio.imread(self.normal_path).astype(np.float32) / 255.
+                self.normal = cv2.resize(self.normal, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
+                self.normal = self.normal.reshape((-1, 3))
+            else:
+                self.normal = None
+
             if self.min_depth_path is not None:
                 self.min_depth = imageio.imread(self.min_depth_path).astype(np.float32) / 255. * self.max_depth + 1e-4
                 self.min_depth = cv2.resize(self.min_depth, (self.W, self.H), interpolation=cv2.INTER_LINEAR)
@@ -120,6 +129,13 @@ class RaySamplerSingleImage(object):
             # print('bad get_img', self.img_path)
             return None
 
+    def get_normal(self):
+        if self.normal is not None:
+            return self.normal.reshape((self.H, self.W, 3))
+        else:
+            # print('bad get_normal', self.img_path)
+            return None
+
     def get_all(self, with_pose_intrinsic=False):
         if self.min_depth is not None:
             min_depth = self.min_depth
@@ -133,6 +149,7 @@ class RaySamplerSingleImage(object):
                 ('depth', self.depth),
                 ('rgb', self.img),
                 ('mask', self.mask),
+                ('normal', self.normal),
                 ('min_depth', min_depth),
             ])
         else:
@@ -142,6 +159,7 @@ class RaySamplerSingleImage(object):
                 ('depth', self.depth),
                 ('rgb', self.img),
                 ('mask', self.mask),
+                ('normal', self.normal),
                 ('min_depth', min_depth),
 
                 ('c2w', self.c2w_mat),
@@ -197,6 +215,11 @@ class RaySamplerSingleImage(object):
         else:
             rgb = None
 
+        if self.normal is not None:
+            normal = self.normal_path[select_inds, :]          # [N_rand, 3]
+        else:
+            normal = None
+
         if self.mask is not None:
             mask = self.mask[select_inds]
         else:
@@ -214,6 +237,7 @@ class RaySamplerSingleImage(object):
                 ('depth', depth),
                 ('rgb', rgb),
                 ('mask', mask),
+                ('normal', normal),
                 ('min_depth', min_depth),
                 ('img_name', self.img_path)
             ])
@@ -224,6 +248,7 @@ class RaySamplerSingleImage(object):
                 ('depth', depth),
                 ('rgb', rgb),
                 ('mask', mask),
+                ('normal', normal),
                 ('min_depth', min_depth),
                 ('img_name', self.img_path),
 

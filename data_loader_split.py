@@ -83,6 +83,13 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
     else:
         mask_files = [None, ] * cam_cnt
 
+    # GT normal files
+    normal_files = find_files(split_dir.split('final/')[0] + 'final/normal/', exts=['*.png', '*.jpg', '*.JPG', '*.PNG'])
+    if len(normal_files) > 0:
+        normal_files = [fn.split('final/')[0] + 'final/normal/' + fn.split('mask/')[1].split('.png')[0] + '_normal_correct.png' for fn in mask_files]
+    else:
+        normal_files = [None, ] * cam_cnt
+
     # min depth files
     mindepth_files = find_files('{}/min_depth'.format(split_dir), exts=['*.png', '*.jpg', '*.JPG', '*.PNG'])
     if try_load_min_depth and len(mindepth_files) > 0:
@@ -114,15 +121,16 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
         else:
             H, W = 775, 1044
             print('Couldn\'t find', img_files[i], ', using img_size=', W, H)
-        # ForkedPdb().set_trace()
+
         ray_samplers.append(RaySamplerSingleImage(H=H, W=W, intrinsics=intrinsics, c2w=pose,
                                                   img_path=img_files[i],
                                                   mask_path=mask_files[i],
+                                                  normal_path=normal_files[i],
                                                   min_depth_path=mindepth_files[i],
                                                   max_depth=max_depth,
                                                   use_ray_jitter=use_ray_jitter,
                                                   resolution_level=resolution_level))
-
+    ForkedPdb().set_trace()
     logger.info('Split {}, # views: {}'.format(split, cam_cnt))
 
     return ray_samplers

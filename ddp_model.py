@@ -133,14 +133,12 @@ class NerfNet(nn.Module):
 
         # fg_viewdirs = fg_viewdirs * 0  # todo: disable viewdirs, because we need albedo
         with torch.enable_grad():
-
             fg_pts = fg_ray_o + fg_z_vals.unsqueeze(-1) * fg_ray_d
             fg_pts.requires_grad_(True)
 
             input = torch.cat((self.fg_embedder_position(fg_pts, iteration), fg_sph, self.fg_embedder_viewdir(fg_viewdirs, iteration)), dim=-1)
 
             fg_raw = self.fg_net(input)
-            # ForkedPdb().set_trace()
 
             # sigmamasked = fg_raw['sigma']*(fg_raw['sigma'] < 4.0)
             # fg_raw['sigma'] = fg_raw['sigma'] - sigmamasked
