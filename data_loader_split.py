@@ -130,7 +130,7 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
                                                   max_depth=max_depth,
                                                   use_ray_jitter=use_ray_jitter,
                                                   resolution_level=resolution_level))
-    ForkedPdb().set_trace()
+    
     logger.info('Split {}, # views: {}'.format(split, cam_cnt))
 
     return ray_samplers
