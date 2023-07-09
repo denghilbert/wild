@@ -758,6 +758,11 @@ def ddp_train_nerf(rank, args, one_card=False):
             else:
                 mask = None
 
+            if ray_batch['normal'] is not None:
+                normal_gt = ray_batch['normal'].to(rank)
+            else:
+                normal_gt = None
+
             if 'autoexpo' in ret:
                 assert (False)
                 scale, shift = ret['autoexpo']
@@ -795,6 +800,22 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
 
+                fg_normal = ret['fg_normal']
+                t1 = fg_normal.unsqueeze(0).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                t2 = fg_normal.unsqueeze(1).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                cos0 = torch.sum(t1 * t2, dim=1)
+                normal_gt = torch.nn.functional.normalize(normal_gt, p=2, dim=-1)
+                t3 = normal_gt.unsqueeze(0).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                t4 = normal_gt.unsqueeze(1).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                cos1 = torch.sum(t3 * t4, dim=1)
+                normal_loss = torch.pow(cos0 - cos1, 2).mean()
+                # sub = torch.sum(torch.abs(fg_normal - normal_gt), dim=-1)
+                # cos0 = torch.sum(fg_normal * normal_gt, dim=-1)
+                # cos0 = torch.clamp(cos, min=-1., max=1.)
+                # cos1 = torch.sum(fg_normal * normal_gt, dim=-1)
+                # cos1 = torch.clamp(cos, min=-1., max=1.)
+                # normal_loss = ((1 - cos)**2).mean()# + sub.mean()
+
                 if args.normal_loss_weight != -1 and global_step >= 20000:
                     # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
                     # important !!!
@@ -809,20 +830,23 @@ def ddp_train_nerf(rank, args, one_card=False):
                 """just avoid trivial solution at first 10 step, I don't even know why it have such huge effect...."""
                 if global_step < 10:
                     loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                           (args.normal_loss_weight / 100000) * normal_direction_loss
+                           (args.normal_loss_weight / 100000) * normal_direction_loss + 0.0 * normal_loss
                 else:
                     loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                           args.normal_loss_weight * normal_direction_loss
+                           args.normal_loss_weight * normal_direction_loss + 0.01 * normal_loss
+
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
                 writer_loss.add_scalar('level{}'.format(m) + 'rgb_loss', rgb_loss.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'pnsr', mse2psnr(rgb_loss.item()), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'normal_direction_loss', normal_direction_loss.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'normal_gt_loss', normal_loss.item(), global_step)
                 scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
                 scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
                 scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
                 scalars_to_log['level_{}/normal_direction_loss'.format(m)] = normal_direction_loss.item()
+                scalars_to_log['level_{}/normal_gt_loss'.format(m)] = normal_loss.item()
 
 
             loss.backward()

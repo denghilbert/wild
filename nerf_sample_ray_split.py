@@ -217,7 +217,7 @@ class RaySamplerSingleImage(object):
             rgb = None
 
         if self.normal is not None:
-            normal = self.normal_path[select_inds, :]          # [N_rand, 3]
+            normal = self.normal[select_inds, :]          # [N_rand, 3]
         else:
             normal = None
 
