@@ -611,6 +611,12 @@ def ddp_train_nerf(rank, args, one_card=False):
         args.N_rand = 128
         args.chunk_size = 1024
 
+    ###
+    steps_per_level = args.steps_per_level
+    level = 0
+    level_init = args.level_init
+    level_max = args.level_max
+
     ###### Create log dir and copy the config file
     if rank == 0:
         os.makedirs(os.path.join(args.basedir, args.expname), exist_ok=True)
@@ -812,13 +818,20 @@ def ddp_train_nerf(rank, args, one_card=False):
             # # clean unused memory
             torch.cuda.empty_cache()
 
+            ### update coarse2fine mask
+            if global_step % 2000 == 0:
+                level = int(global_step / steps_per_level)
+                level = max(level, level_init)
+                level = min(level, level_max)
+                net.module.nerf_net.implicit_network.update_mask(level)
+
         ### end of core optimization loop
         dt = time.time() - time0
         scalars_to_log['iter_time'] = dt
 
         ### only main process should do the logging
         if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
-            logstr = '{} step: {} '.format(args.expname, global_step)
+            logstr = '{} step: {} '.format(args.expname, global_step) + 'hash level {} '.format(level)
             for k in scalars_to_log:
                 logstr += ' {}: {:.6f}'.format(k, scalars_to_log[k])
                 writer.add_scalar(k, scalars_to_log[k], global_step)
@@ -1098,6 +1111,10 @@ def config_parser():
     # grid weight
     parser.add_argument("--eikonal_weight", type=float, default=0.1)
     parser.add_argument("--smooth_weight", type=float, default=0.005)
+
+    parser.add_argument("--steps_per_level", type=int, default=500)
+    parser.add_argument("--level_init", type=int, default=4)
+    parser.add_argument("--level_max", type=int, default=16)
 
     return parser
 

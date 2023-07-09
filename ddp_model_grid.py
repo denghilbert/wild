@@ -54,7 +54,8 @@ class ImplicitNetworkGrid(nn.Module):
             num_levels=16,
             level_dim=8,#2,
             divide_factor=1.5,  # used to normalize the points range for multi-res grid
-            use_grid_feature=True
+            use_grid_feature=True,
+            coarse2fine = False,
     ):
         super().__init__()
 
@@ -62,8 +63,10 @@ class ImplicitNetworkGrid(nn.Module):
         dims = [d_in] + dims + [d_out + feature_vector_size]
         self.embed_fn = None
         self.divide_factor = divide_factor
+        self.features_per_level = level_dim
         self.grid_feature_dim = num_levels * level_dim
         self.use_grid_feature = use_grid_feature
+        self.coarse2fine = coarse2fine
         dims[0] += self.grid_feature_dim
 
         print(f"using hash encoder with {num_levels} levels, each level with feature dim {level_dim}")
@@ -71,6 +74,11 @@ class ImplicitNetworkGrid(nn.Module):
         self.encoding = HashEncoder(input_dim=3, num_levels=num_levels, level_dim=level_dim,
                                     per_level_scale=2, base_resolution=base_size,
                                     log2_hashmap_size=logmap, desired_resolution=end_size)
+
+        # For coarse to fine training
+        self.hash_encoding_mask = torch.ones(
+            self.grid_feature_dim, dtype=torch.float32
+        )
 
         if multires > 0:
             embed_fn, input_ch = get_embedder(multires, input_dims=d_in)
@@ -119,10 +127,17 @@ class ImplicitNetworkGrid(nn.Module):
         self.softplus = nn.Softplus(beta=100)
         self.cache_sdf = None
 
+    def update_mask(self, level):
+        self.hash_encoding_mask[:] = 1.0
+        self.hash_encoding_mask[level * self.features_per_level:] = 0
+
     def forward(self, input1):
         if self.use_grid_feature:
             # normalize point range as encoding assume points are in [-1, 1]
             feature = self.encoding(input1 / self.divide_factor)
+            if self.coarse2fine:
+                # mask feature
+                feature = feature * self.hash_encoding_mask.to(feature.device)
         else:
             feature = torch.zeros_like(input1[:, :1].repeat(1, self.grid_feature_dim))
 
@@ -303,11 +318,12 @@ class GridNerfNet(nn.Module):
         grid_net_inside_outside = True
         grid_net_use_grid_feature = True
         grid_net_divide_factor = 1.0
+        coarse2fine = True
         self.implicit_network = ImplicitNetworkGrid(
             self.feature_vector_size, grid_net_d_in, grid_net_d_out, grid_net_dims,
             grid_net_geometric_init, grid_net_bias, grid_net_skip_in, grid_net_weight_norm,
             grid_net_multires, grid_net_inside_outside, use_grid_feature=grid_net_use_grid_feature,
-            divide_factor=grid_net_divide_factor
+            divide_factor=grid_net_divide_factor, coarse2fine=coarse2fine
         )
         render_mode = 'idr'
         render_d_in = 9
