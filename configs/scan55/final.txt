@@ -1,7 +1,7 @@
 ### INPUT
-datadir = data/barn
+datadir = data/scan55
 scene = final
-expname = barn_final
+expname = scan55_final
 basedir = logs
 config = None
 ckpt_path = None
@@ -17,7 +17,7 @@ lrate_decay_steps = 50000000
 
 ### CASCADE
 cascade_level = 1
-cascade_samples = 64,128
+cascade_samples = 64128
 
 ### TESTING
 chunk_size = 8192
@@ -35,9 +35,9 @@ use_viewdirs = False
 activation = relu
 
 ### CONSOLE AND TENSORBOARD
-i_img = 5000
+i_img = 2000
 i_print = 100
-i_weights = 5000
+i_weights = 2000
 
 ### GRID NERF PARAMETERS
 grid_feature_vector_size = 256
