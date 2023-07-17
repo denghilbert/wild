@@ -17,7 +17,8 @@ lrate_decay_steps = 50000000
 
 ### CASCADE
 cascade_level = 2
-cascade_samples = 64,128
+#cascade_samples = 64,128
+cascade_samples = 32,64
 
 ### TESTING
 chunk_size = 8192

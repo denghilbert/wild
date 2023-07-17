@@ -2,86 +2,124 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from model.decoder import NeRFDecoder
-from model.multi_grid import MultiGrid
-from model.utils import compute_world_dims, coordinates
+import sys
+import pdb
 
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+from go_model.decoder import NeRFDecoder
+# from multi_grid import MultiGrid
+from go_model.utils import compute_world_dims, coordinates
+
+from grid_function.hashencoder.hashgrid import _hash_encode, HashEncoder
+from grid_function.ray_sampler import ErrorBoundSampler
 
 class SDFGridModel(torch.nn.Module):
     def __init__(self,
                  config,
-                 device,
-                 bounds,
-                 margin=0.1,
                  ):
         super(SDFGridModel, self).__init__()
-        self.device = device
-        # Simple decoder
 
-        world_dims, volume_origin, voxel_dims = compute_world_dims(bounds,
-                                                                   config["voxel_sizes"],
-                                                                   len(config["voxel_sizes"]),
-                                                                   margin=margin,
-                                                                   device=device)
-
-        self.world_dims = world_dims
-        self.volume_origin = volume_origin
-        self.voxel_dims = voxel_dims
-
-        grid_dim = (torch.tensor(config["sdf_feature_dim"]) + torch.tensor(config["rgb_feature_dim"])).tolist()
-        self.grid = MultiGrid(voxel_dims, grid_dim).to(device)
-
-        self.decoder = NeRFDecoder(config["decoder"]["geometry"],
-                                   config["decoder"]["radiance"],
-                                   sdf_feat_dim=sum(config["sdf_feature_dim"]),
-                                   rgb_feat_dim=sum(config["rgb_feature_dim"])).to(device)
+        base_size = 16  # 64,
+        end_size = 2048  # 8192,
+        logmap = 19  # 2,
+        num_levels = 16
+        level_dim = 2  # 8,
+        print(f"using hash encoder with {num_levels} levels, each level with feature dim {level_dim}")
+        print(f"resolution:{base_size} -> {end_size} with hash map size {logmap}")
+        self.grid = HashEncoder(input_dim=3, num_levels=num_levels, level_dim=level_dim,
+                                    per_level_scale=2, base_resolution=base_size,
+                                    log2_hashmap_size=logmap, desired_resolution=end_size)
+        """
+        (Pdb) self.grid
+        MultiGrid(
+          (volumes): ParameterList(
+              (0): Parameter containing: [torch.cuda.FloatTensor of size 1x4x129x97x161 (GPU 0)]
+              (1): Parameter containing: [torch.cuda.FloatTensor of size 1x10x65x49x81 (GPU 0)]
+              (2): Parameter containing: [torch.cuda.FloatTensor of size 1x4x17x13x21 (GPU 0)]
+              (3): Parameter containing: [torch.cuda.FloatTensor of size 1x4x5x4x6 (GPU 0)]
+          )
+        """
+        sdf_args = {'W': 32, 'D': 2, 'skips': [], 'n_freq': -1, 'weight_norm': False, 'concat_qp': False}
+        rgb_args = {'W': 32, 'D': 2, 'skips': [], 'use_view_dirs': True, 'use_normals': False, 'use_dot_prod': False, 'n_freq': -1, 'weight_norm': False, 'concat_qp': False}
+        self.decoder = NeRFDecoder(sdf_args,
+                                   rgb_args,
+                                   sdf_feat_dim=32,
+                                   rgb_feat_dim=42-3)
+        """
+        (Pdb) config["decoder"]["geometry"], config["decoder"]["radiance"], sum(config["sdf_feature_dim"]), sum(config["rgb_feature_dim"])
+        ({'W': 32, 'D': 2, 'skips': [], 'n_freq': -1, 'weight_norm': False, 'concat_qp': False}, 
+        {'W': 32, 'D': 2, 'skips': [], 'use_view_dirs': True, 'use_normals': False, 'use_dot_prod': False, 'n_freq': -1, 'weight_norm': False, 'concat_qp': False}, 
+        16, 
+        6)
+        """
         self.sdf_decoder = batchify(self.decoder.geometry_net, max_chunk=None)
         self.rgb_decoder = batchify(self.decoder.radiance_net, max_chunk=None)
-        self.config = config
 
-    def forward(self, rays_o, rays_d, target_rgb_select, target_depth_select, inv_s=None, smoothness_std=0., iter=0):
+        # Inverse sigma from NeuS paper
+        self.inv_s = nn.parameter.Parameter(torch.tensor(0.3))
+
+        ray_sampler_near = 0.0
+        ray_sampler_N_samples = 64
+        ray_sampler_N_samples_eval = 128
+        ray_sampler_N_samples_extra = 32
+        ray_sampler_eps = 0.1
+        ray_sampler_beta_iters = 10
+        ray_sampler_max_total_iters = 5
+        self.scene_bounding_sphere = 1.  # conf.get_float('scene_bounding_sphere', default=1.0)
+        self.ray_sampler = ErrorBoundSampler(
+            self.scene_bounding_sphere, ray_sampler_near, ray_sampler_N_samples, ray_sampler_N_samples_eval,
+            ray_sampler_N_samples_extra, ray_sampler_eps, ray_sampler_beta_iters, ray_sampler_max_total_iters)
+
+    def forward(self, ray_o, ray_d, fg_z_max, fg_z_vals, bg_z_vals, env, iteration, c2w, intrinsic, ray_matrix, validation=False):
+        ray_dirs, cam_loc = ray_d.unsqueeze(0), ray_o[:1, :]
+        batch_size, num_pixels, _ = ray_dirs.shape
+
+        cam_loc = cam_loc.unsqueeze(1).repeat(1, num_pixels, 1).reshape(-1, 3)
+        ray_dirs = ray_dirs.reshape(-1, 3)
+
+        z_vals = fg_z_vals
+        N_samples = z_vals.shape[1]
+        dists = z_vals[:, 1:] - z_vals[:, :-1]
+        dists = torch.cat([dists, torch.ones(z_vals.shape[0], 1).cuda()], dim=1)
+        z_vals_mid = z_vals + dists * 0.5
+        """
+        (Pdb) dirs.shape
+        torch.Size([1024, 4096, 3])
+        (Pdb) points_flat.shape
+        torch.Size([4194304, 3])
+        """
+        points = cam_loc.unsqueeze(1) + z_vals.unsqueeze(2) * ray_dirs.unsqueeze(1)
+        # points_flat = points.reshape(-1, 3)
+        dirs = ray_dirs.unsqueeze(1).repeat(1, N_samples, 1)
+        # dirs_flat = dirs.reshape(-1, 3)
+
         rend_dict = render_rays(self.sdf_decoder,
                                 self.rgb_decoder,
                                 self.grid,
-                                self.volume_origin,
-                                self.world_dims,
-                                self.config["voxel_sizes"],
-                                rays_o,
-                                rays_d,
-                                near=self.config["near"],
-                                far=self.config["far"],
-                                n_samples=self.config["n_samples"],
-                                depth_gt=target_depth_select,
-                                n_importance=self.config["n_importance"],
-                                truncation=self.config["truncation"],
-                                inv_s=inv_s,
-                                smoothness_std=smoothness_std,
-                                use_view_dirs=self.config["decoder"]["radiance"]["use_view_dirs"],
-                                use_normals=self.config["decoder"]["radiance"]["use_normals"],
-                                concat_qp_to_rgb=self.config["decoder"]["radiance"]["concat_qp"],
-                                concat_qp_to_sdf=self.config["decoder"]["geometry"]["concat_qp"],
-                                concat_dot_prod_to_rgb=self.config["decoder"]["radiance"]["use_dot_prod"],
-                                rgb_feature_dim=self.config["rgb_feature_dim"],
-                                iter=iter)
+                                # points_flat,
+                                points,
+                                # dirs_flat,
+                                dirs,
+                                dists,
+                                z_vals_mid,
+                                z_vals,
+                                iter=iteration,
+                                inv_s=torch.exp(10. * self.inv_s),
+                                validation=validation)
 
-        rendered_rgb, rendered_depth = rend_dict["rgb"], rend_dict["depth"]
-        rgb_loss = compute_loss(rendered_rgb, target_rgb_select, "l2")
-        psnr = mse2psnr(rgb_loss)
-        valid_depth_mask = target_depth_select > 0.
-        depth_loss = F.l1_loss(target_depth_select[valid_depth_mask], rendered_depth[valid_depth_mask])
-
-        ret = {
-            "rgb_loss": rgb_loss,
-            "depth_loss": depth_loss,
-            "sdf_loss": rend_dict["sdf_loss"],
-            "fs_loss": rend_dict["fs_loss"],
-            "normal_regularisation_loss": rend_dict["normal_regularisation_loss"],
-            "normal_supervision_loss": rend_dict["normal_supervision_loss"],
-            "eikonal_loss": rend_dict["eikonal_loss"],
-            "psnr": psnr
-        }
-
-        return ret
+        return rend_dict
 
 
 def batchify(fn, max_chunk=1024 * 128):
@@ -98,12 +136,12 @@ def batchify(fn, max_chunk=1024 * 128):
 def render_rays(sdf_decoder,
                 rgb_decoder,
                 feat_volume,  # regualized feature volume [1, feat_dim, Nx, Ny, Nz]
-                volume_origin,  # volume origin, Euclidean coords [3,]
-                volume_dim,  # volume dimensions, Euclidean coords [3,]
-                voxel_sizes,  # length of the voxel side, Euclidean distance
-                rays_o,
-                rays_d,
-                truncation=0.10,
+                # points_flat,
+                points,
+                view_dirs,
+                dists,
+                z_vals_mid,
+                z_vals,
                 near=0.01,
                 far=3.0,
                 n_samples=128,
@@ -120,60 +158,24 @@ def render_rays(sdf_decoder,
                 concat_dot_prod_to_rgb=False,
                 iter=0,
                 rgb_feature_dim=[],
+                validation=False
                 ):
-    n_rays = rays_o.shape[0]
-    z_vals = torch.linspace(near, far, n_samples).to(rays_o)
-    z_vals = z_vals[None, :].repeat(n_rays, 1)  # [n_rays, n_samples]
-    sample_dist = (far - near) / n_samples
-
-    if randomize_samples:
-        z_vals += torch.rand_like(z_vals) * sample_dist
-
-    n_importance_steps = n_importance // 12
-    with torch.no_grad():
-        for step in range(n_importance_steps):
-            query_points = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # n_rays, n_samples, 3
-            sdf, *_ = qp_to_sdf(query_points, volume_origin, volume_dim, feat_volume, sdf_decoder,
-                                concat_qp=concat_qp_to_sdf, rgb_feature_dim=rgb_feature_dim)
-
-            prev_sdf, next_sdf = sdf[:, :-1], sdf[:, 1:]
-            prev_z_vals, next_z_vals = z_vals[:, :-1], z_vals[:, 1:]
-            mid_sdf = (prev_sdf + next_sdf) * 0.5
-            cos_val = (next_sdf - prev_sdf) / (next_z_vals - prev_z_vals + 1e-5)
-
-            prev_cos_val = torch.cat([torch.zeros([n_rays, 1], device=z_vals.device), cos_val[:, :-1]], dim=-1)
-            cos_val = torch.stack([prev_cos_val, cos_val], dim=-1)
-            cos_val, _ = torch.min(cos_val, dim=-1, keepdim=False)
-            cos_val = cos_val.clip(-1e3, 0.0)
-
-            dists = next_z_vals - prev_z_vals
-            weights = neus_weights(mid_sdf, dists, torch.tensor(64. * 2 ** step, device=mid_sdf.device), cos_val)
-            z_samples = sample_pdf(z_vals, weights, 12, det=True).detach()
-            z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], dim=-1), dim=-1)
-
-    dists = z_vals[:, 1:] - z_vals[:, :-1]
-    dists = torch.cat([dists, torch.ones_like(depth_gt).unsqueeze(-1) * sample_dist], dim=1)
-    z_vals_mid = z_vals + dists * 0.5
-    view_dirs = F.normalize(rays_d, dim=-1)[:, None, :].repeat(1, n_samples + n_importance, 1)
-    query_points = rays_o[:, None, :] + rays_d[:, None, :] * z_vals_mid[..., :, None]
-    query_points = query_points.requires_grad_(True)
-    sdf, rgb_feat, world_bound_mask = qp_to_sdf(query_points, volume_origin, volume_dim, feat_volume,
-                                                sdf_decoder, concat_qp=concat_qp_to_sdf,
-                                                rgb_feature_dim=rgb_feature_dim)
-
-    grads = compute_grads(sdf, query_points)
+    query_points = points
+    # important !!! we should enable_grad within no_grad wrap
+    if validation == True:
+        with torch.enable_grad():
+            query_points = query_points.requires_grad_(True)
+            sdf, rgb_feat, grads = qp_to_sdf_rgb_feat(query_points, feat_volume, sdf_decoder)
+    else:
+        query_points = query_points.requires_grad_(True)
+        sdf, rgb_feat, grads = qp_to_sdf_rgb_feat(query_points, feat_volume, sdf_decoder)
 
     rgb_feat = [rgb_feat]
 
-    if use_view_dirs:
-        rgb_feat.append(view_dirs)
-    if use_normals:
-        rgb_feat.append(grads)
-    if concat_qp_to_rgb:
-        rgb_feat.append(2. * (query_points - volume_origin) / volume_dim - 1.)
-    if concat_dot_prod_to_rgb:
-        rgb_feat.append((view_dirs * grads).sum(dim=-1, keepdim=True))
-
+    rgb_feat.append(view_dirs)
+    rgb_feat.append(grads)
+    rgb_feat.append(query_points)
+    rgb_feat.append((view_dirs * grads).sum(dim=-1, keepdim=True))
     rgb = torch.sigmoid(rgb_decoder(torch.cat(rgb_feat, dim=-1)))
 
     cos_val = (view_dirs * grads).sum(-1)
@@ -181,85 +183,48 @@ def render_rays(sdf_decoder,
     cos_anneal_ratio = min(iter / 5000., 1.)
     cos_val = -(F.relu(-cos_val * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
                 F.relu(-cos_val) * cos_anneal_ratio)
-    weights = neus_weights(sdf, dists, inv_s, cos_val)
-    weights[~world_bound_mask] = 0.
 
+    weights = neus_weights(sdf[:, :, 0], dists, inv_s, cos_val)
     rendered_rgb = torch.sum(weights[..., None] * rgb, dim=-2)
-    rendered_depth = torch.sum(weights * z_vals_mid, dim=-1)
+    # rendered_depth = torch.sum(weights * z_vals_mid, dim=-1)
+    rendered_depth = torch.sum(weights * z_vals, dim=-1)
     # depth_var = torch.sum(weights * torch.square(z_vals_mid - rendered_depth.unsqueeze(-1)), dim=-1)
-
-    eikonal_weights = sdf[
-                          world_bound_mask].detach().abs() + 1e-2  # torch.abs(z_vals - depth_gt.unsqueeze(-1))[world_bound_mask] > truncation
-    eikonal_loss = (torch.square(
-        grads.norm(dim=-1)[world_bound_mask] - 1.) * eikonal_weights).sum() / eikonal_weights.sum()
-    eikonal_loss = eikonal_loss.mean()
-
-    if depth_gt is not None:
-        fs_loss, sdf_loss = get_sdf_loss(z_vals_mid, depth_gt[:, None], sdf, truncation)
-    else:
-        fs_loss, sdf_loss = torch.tensor(0.0, device=rays_o.device), torch.tensor(0.0, device=rays_o.device)
-
-    normal_regularisation_loss = torch.tensor(0., device=z_vals.device)
-    if smoothness_std > 0:
-        coords = coordinates([feat_volume.volumes[1].shape[2] - 1, feat_volume.volumes[1].shape[3] - 1,
-                              feat_volume.volumes[1].shape[4] - 1], z_vals.device).float().t()
-        world = ((coords + torch.rand_like(coords)) * voxel_sizes[1] + volume_origin).unsqueeze(0)
-        surf = rays_o + rays_d * rendered_depth.unsqueeze(-1)
-        surf_mask = ((surf > volume_origin) & (surf < (volume_origin + volume_dim))).all(dim=-1)
-        surf = surf[surf_mask, :].unsqueeze(0)
-        weight = torch.cat(
-            [torch.ones(world.shape[:-1], device=world.device) * 0.1, torch.ones(surf.shape[:-1], device=surf.device)],
-            dim=1)
-        world = torch.cat([world, surf], dim=1)
-
-        query_points = world.requires_grad_(True)
-        sdf, *_ = qp_to_sdf(query_points, volume_origin, volume_dim, feat_volume, sdf_decoder,
-                            concat_qp=concat_qp_to_sdf, rgb_feature_dim=rgb_feature_dim)
-        mask = sdf.abs() < truncation
-
-        if mask.any().item():
-            grads = compute_grads(sdf, query_points)[mask]
-
-            # Sample points inside unit circle orthogonal to gradient direction
-            n = F.normalize(grads, dim=-1)
-            u = F.normalize(n[..., [1, 0, 2]] * torch.tensor([1., -1., 0.], device=n.device), dim=-1)
-            v = torch.cross(n, u, dim=-1)
-            phi = torch.rand(list(grads.shape[:-1]) + [1], device=grads.device) * 2. * np.pi
-            w = torch.cos(phi) * u + torch.sin(phi) * v
-
-            world2 = world[mask] + w * smoothness_std
-            query_points = world2.requires_grad_(True)
-            sdf, *_ = qp_to_sdf(query_points, volume_origin, volume_dim, feat_volume, sdf_decoder,
-                                concat_qp=concat_qp_to_sdf, rgb_feature_dim=rgb_feature_dim)
-            grads2 = compute_grads(sdf, query_points)
-
-            normal_regularisation_loss = ((grads - grads2).norm(dim=-1) * weight[mask]).sum() / weight[mask].sum()
-
-    normal_supervision_loss = torch.tensor(0., device=z_vals.device)
-    if normals_gt is not None:
-        depth_mask = (depth_gt > 0.) & (normals_gt != 0.).any(dim=-1)
-        query_points = rays_o[depth_mask] + rays_d[depth_mask] * depth_gt[depth_mask, None]
-        query_points = query_points.requires_grad_(True)
-        sdf, *_ = qp_to_sdf(query_points, volume_origin, volume_dim, feat_volume, sdf_decoder,
-                            concat_qp=concat_qp_to_sdf, rgb_feature_dim=rgb_feature_dim)
-        normals = compute_grads(sdf, query_points)
-        normal_supervision_loss = F.mse_loss(normals, normals_gt[depth_mask])
+    normalized_grads = F.normalize(grads, p=2, dim=-1)
+    rendered_normal = torch.sum(weights[..., None] * normalized_grads, dim=-2)
+    ForkedPdb().set_trace()
 
     ret = {"rgb": rendered_rgb,
            "depth": rendered_depth,
-           "sdf_loss": sdf_loss,
-           "fs_loss": fs_loss,
-           "sdfs": sdf,
+           "sdf": sdf,
+           "normal": rendered_normal,
+           # "sdf_loss": sdf_loss,
+           # "fs_loss": fs_loss,
+           # "sdfs": sdf,
            "weights": weights,
-           "normal_regularisation_loss": normal_regularisation_loss,
-           "eikonal_loss": eikonal_loss,
-           "normal_supervision_loss": normal_supervision_loss,
+           # "normal_regularisation_loss": normal_regularisation_loss,
+           # "eikonal_loss": eikonal_loss,
+           # "normal_supervision_loss": normal_supervision_loss,
            }
-
     return ret
 
 
 mse2psnr = lambda x: -10. * torch.log(x) / torch.log(torch.Tensor([10.])).to(x)
+
+
+def qp_to_sdf_rgb_feat(pts, feat_volume, sdf_decoder, divide_factor=1.5):
+    feature = feat_volume(pts / divide_factor)
+    sdf = sdf_decoder(feature)
+
+    d_output = torch.ones_like(sdf, requires_grad=False, device=sdf.device)
+    gradients = torch.autograd.grad(
+        outputs=sdf,
+        inputs=pts,
+        grad_outputs=d_output,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True)[0]
+
+    return sdf, feature, gradients
 
 
 def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, sdf_act=nn.Identity(), concat_qp=False,
@@ -268,16 +233,16 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, sdf_act=
     pts_norm = 2. * (pts - volume_origin[None, None, :]) / volume_dim[None, None, :] - 1.
     mask = (pts_norm.abs() <= 1.).all(dim=-1)
     pts_norm = pts_norm[mask].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
+    """
+    4, 10, 4, 4
+    """
     mlvl_feats = feat_volume(pts_norm[..., [2, 1, 0]], concat=False)
     sdf_feats = list(map(lambda feat_pts, rgb_dim: feat_pts[:, :-rgb_dim, ...] if rgb_dim > 0 else feat_pts,
                          mlvl_feats, rgb_feature_dim))
-
     sdf_feats = torch.cat(sdf_feats, dim=1).squeeze(0).squeeze(1).squeeze(1).t()
 
     rgb_feats = map(lambda feat_pts, rgb_dim: feat_pts[:, -rgb_dim:, ...] if rgb_dim > 0 else None,
                     mlvl_feats, rgb_feature_dim)
-
     rgb_feats = list(filter(lambda x: x is not None, rgb_feats))
     rgb_feats = torch.cat(rgb_feats, dim=1).squeeze(0).squeeze(1).squeeze(1).t()
 
@@ -286,11 +251,15 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, sdf_act=
 
     if concat_qp:
         sdf_feats.append(pts_norm.permute(0, 4, 1, 2, 3))
-
+    """
+    4 res, with 4 4 4 4 = 16
+    """
     raw = sdf_decoder(sdf_feats)
     sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
     sdf[mask] = sdf_act(raw.squeeze(-1))
-
+    """
+    with only 6
+    """
     return sdf, rgb_feats_unmasked, mask
 
 
