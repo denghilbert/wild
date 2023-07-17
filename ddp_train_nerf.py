@@ -800,23 +800,28 @@ def ddp_train_nerf(rank, args, one_card=False):
                 if not args.use_shadow_reg:
                     shadow_reg = 0 * shadow_reg
 
-                fg_normal = ret['fg_normal']
-                t1 = fg_normal.unsqueeze(0).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
-                t2 = fg_normal.unsqueeze(1).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
-                cos0 = torch.sum(t1 * t2, dim=1)
-                normal_gt = torch.nn.functional.normalize(normal_gt, p=2, dim=-1)
-                t3 = normal_gt.unsqueeze(0).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
-                t4 = normal_gt.unsqueeze(1).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
-                cos1 = torch.sum(t3 * t4, dim=1)
-                normal_loss = torch.pow(cos0 - cos1, 2).mean()
-                # sub = torch.sum(torch.abs(fg_normal - normal_gt), dim=-1)
-                # cos0 = torch.sum(fg_normal * normal_gt, dim=-1)
-                # cos0 = torch.clamp(cos, min=-1., max=1.)
-                # cos1 = torch.sum(fg_normal * normal_gt, dim=-1)
-                # cos1 = torch.clamp(cos, min=-1., max=1.)
-                # normal_loss = ((1 - cos)**2).mean()# + sub.mean()
 
-                if args.normal_loss_weight != -1 and global_step >= 20000:
+                if args.normal_gt_loss_weight != -1 and global_step >= 2000:
+                    fg_normal = ret['fg_normal']
+                    t1 = fg_normal.unsqueeze(0).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                    t2 = fg_normal.unsqueeze(1).expand(fg_normal.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                    cos0 = torch.sum(t1 * t2, dim=1)
+                    normal_gt = torch.nn.functional.normalize(normal_gt, p=2, dim=-1)
+                    t3 = normal_gt.unsqueeze(0).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                    t4 = normal_gt.unsqueeze(1).expand(normal_gt.shape[0], fg_normal.shape[0], 3).reshape(-1, 3)
+                    cos1 = torch.sum(t3 * t4, dim=1)
+                    normal_loss = torch.pow(cos0 - cos1, 2).mean()
+                    # sub = torch.sum(torch.abs(fg_normal - normal_gt), dim=-1)
+                    # cos0 = torch.sum(fg_normal * normal_gt, dim=-1)
+                    # cos0 = torch.clamp(cos, min=-1., max=1.)
+                    # cos1 = torch.sum(fg_normal * normal_gt, dim=-1)
+                    # cos1 = torch.clamp(cos, min=-1., max=1.)
+                    # normal_loss = ((1 - cos)**2).mean()# + sub.mean()
+                else:
+                    normal_loss = torch.tensor(0.0).cuda().float()
+
+
+                if args.normal_loss_weight != -1 and global_step >= 2000:
                     # ret['fg_normal_map_postintegral'] and 'fg_normal' cannot be detached!!!!!
                     # important !!!
                     fg_normal_map_postintegral = ret['fg_normal_map_postintegral']
@@ -1099,6 +1104,7 @@ def config_parser():
 
     # youming options
     parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
+    parser.add_argument("--normal_gt_loss_weight", type=float, default=-1, help='normal gt loss weight')
     parser.add_argument("--master_port", type=int, default=12222, help='master_port of the program')
     parser.add_argument("--start_val", default = False, action="store_true", help = 'if reload, start validation at start+1 step')
 
