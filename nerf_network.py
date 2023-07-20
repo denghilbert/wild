@@ -151,6 +151,7 @@ class MLPNet(nn.Module):
 
         self.base_layers = []
         dim = self.input_ch
+
         for i in range(D):
             # if i % 4 == 0:
             #     self.base_layers.append(
@@ -212,6 +213,7 @@ class MLPNet(nn.Module):
         '''
         input_pts = input[..., :self.input_ch]
 
+        #ForkedPdb().set_trace()
         # print(input_pts.shape)
         base = self.base_layers[0](input_pts)
         for i in range(len(self.base_layers)-1):

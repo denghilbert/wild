@@ -90,6 +90,13 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
     else:
         normal_files = [None, ] * cam_cnt
 
+    # GT depth files
+    depth_files = find_files(split_dir.split('final/')[0] + 'final/depth/', exts=['*.png', '*.jpg', '*.JPG', '*.PNG', '*.npy'])
+    if len(depth_files) > 0:
+        depth_files = [fn.split('final/')[0] + 'final/depth/' + fn.split('rgb/')[1].split('.')[0] + '_depth.npy' for fn in img_files]
+    else:
+        depth_files = [None, ] * cam_cnt
+
     # min depth files
     mindepth_files = find_files('{}/min_depth'.format(split_dir), exts=['*.png', '*.jpg', '*.JPG', '*.PNG'])
     if try_load_min_depth and len(mindepth_files) > 0:
@@ -126,6 +133,7 @@ def load_data_split(basedir, scene, split, skip=1, try_load_min_depth=True, only
                                                   img_path=img_files[i],
                                                   mask_path=mask_files[i],
                                                   normal_path=normal_files[i],
+                                                  depth_path=depth_files[i],
                                                   min_depth_path=mindepth_files[i],
                                                   max_depth=max_depth,
                                                   use_ray_jitter=use_ray_jitter,

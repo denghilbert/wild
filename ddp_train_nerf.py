@@ -224,7 +224,7 @@ def render_single_image(rank, world_size, models, ray_sampler, chunk_size, itera
             with torch.no_grad():
                 ret = net(ray_o, ray_d, fg_far_depth, fg_depth, bg_depth, iteration, img_name=ray_sampler.img_path if img_name is None else img_name,
                           rot_angle=rot_angle, save_memory4validation=True)
-
+            
             for key in ret:
                 if key not in ['fg_weights', 'bg_weights']:
                     if torch.is_tensor(ret[key]):
@@ -435,6 +435,7 @@ def log_view_to_tb(output_dir, writer, global_step, log_data, gt_img, mask, pref
         save_image(output_dir + prefix + 'level_{}_fg_depth.png'.format(m), 255*depth_im.numpy())
 
         normal_im = (log_data[m]['fg_normal'])
+
         normal_im = (normal_im + 1) / 2
         normal_im = torch.clamp(normal_im, min=0., max=1.)  # just in case diffuse+specular>1
         # writer.add_image(prefix + 'level_{}/fg_normal'.format(m), normal_im, global_step)
@@ -763,6 +764,11 @@ def ddp_train_nerf(rank, args, one_card=False):
             else:
                 normal_gt = None
 
+            if ray_batch['depth_gt'] is not None:
+                depth_gt = ray_batch['depth_gt'].to(rank)
+            else:
+                depth_gt = None
+
             if 'autoexpo' in ret:
                 assert (False)
                 scale, shift = ret['autoexpo']
@@ -832,13 +838,23 @@ def ddp_train_nerf(rank, args, one_card=False):
                 else:
                     normal_direction_loss = torch.tensor(0.0).cuda().float()
 
+                if args.depth_gt_loss_weight != -1 and global_step >= 0:
+                    fg_depth = ret['fg_depth']
+                    t1 = fg_depth.unsqueeze(-1).expand(fg_depth.shape[0], fg_depth.shape[0])
+                    t2 = fg_depth.unsqueeze(0).expand(fg_depth.shape[0], fg_depth.shape[0])
+                    t3 = depth_gt[:, 0].unsqueeze(-1).expand(depth_gt.shape[0], depth_gt.shape[0])
+                    t4 = depth_gt[:, 0].unsqueeze(0).expand(depth_gt.shape[0], depth_gt.shape[0])
+                    depth_loss = torch.pow((t1 / t2) - (t3 / t4), 2).mean()
+                else:
+                    depth_loss = torch.tensor(0.0).cuda().float()
+
                 """just avoid trivial solution at first 10 step, I don't even know why it have such huge effect...."""
                 if global_step < 10:
                     loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
                            (args.normal_loss_weight / 100000) * normal_direction_loss + 0.0 * normal_loss
                 else:
                     loss = rgb_loss + (shadow_reg * args.shadow_reg) * np.clip((global_step - 10000) / 20000, 0, 1) + \
-                           args.normal_loss_weight * normal_direction_loss + 0.01 * normal_loss
+                           args.normal_loss_weight * normal_direction_loss + args.normal_gt_loss_weight *  normal_loss + args.depth_gt_loss_weight * depth_loss
 
             # record loss curve
             if rank == 0 and (global_step % args.i_print == 0 or global_step < 10):
@@ -847,10 +863,12 @@ def ddp_train_nerf(rank, args, one_card=False):
                 writer_loss.add_scalar('level{}'.format(m) + 'shadow_reg', shadow_reg.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'normal_direction_loss', normal_direction_loss.item(), global_step)
                 writer_loss.add_scalar('level{}'.format(m) + 'normal_gt_loss', normal_loss.item(), global_step)
+                writer_loss.add_scalar('level{}'.format(m) + 'depth_gt_loss', depth_loss.item(), global_step)
                 scalars_to_log['level_{}/loss'.format(m)] = rgb_loss.item()
                 scalars_to_log['level_{}/pnsr'.format(m)] = mse2psnr(rgb_loss.item())
                 scalars_to_log['level_{}/shadow_reg'.format(m)] = shadow_reg.item()
                 scalars_to_log['level_{}/normal_direction_loss'.format(m)] = normal_direction_loss.item()
+                scalars_to_log['level_{}/depth_gt_loss'.format(m)] = depth_loss.item()
                 scalars_to_log['level_{}/normal_gt_loss'.format(m)] = normal_loss.item()
 
 
@@ -1105,6 +1123,7 @@ def config_parser():
     # youming options
     parser.add_argument("--normal_loss_weight", type=float, default=-1, help='normal direction loss weight')
     parser.add_argument("--normal_gt_loss_weight", type=float, default=-1, help='normal gt loss weight')
+    parser.add_argument("--depth_gt_loss_weight", type=float, default=-1, help='depth gt loss weight')
     parser.add_argument("--master_port", type=int, default=12222, help='master_port of the program')
     parser.add_argument("--start_val", default = False, action="store_true", help = 'if reload, start validation at start+1 step')
 

@@ -83,6 +83,7 @@ class NerfNet(nn.Module):
                              use_viewdirs=args.use_viewdirs,
                              use_shadow=True,
                              act=args.activation)
+  
         # background; bg_pt is (x, y, z, 1/r)
         self.bg_embedder_position = Embedder(input_dim=4,
                                              max_freq_log2=args.max_freq_log2 - 1,
@@ -137,6 +138,8 @@ class NerfNet(nn.Module):
             fg_pts.requires_grad_(True)
 
             input = torch.cat((self.fg_embedder_position(fg_pts, iteration), fg_sph, self.fg_embedder_viewdir(fg_viewdirs, iteration)), dim=-1)
+            #input = torch.cat((fg_pts, fg_sph, fg_viewdirs), dim=-1)
+            #ForkedPdb().set_trace()
 
             fg_raw = self.fg_net(input)
 
